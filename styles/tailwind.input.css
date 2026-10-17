@@ -1,0 +1,9 @@
+/* Tailwind CSS 4 - generated at development time, prebuilt for .NET-only startup */
+@theme {
+  --color-brand-50: #f5f3ff;
+  --color-brand-100: #ede9fe;
+  --color-brand-500: #6557dc;
+  --color-brand-600: #5748cc;
+  --color-brand-700: #493bad;
+}
+@tailwind utilities;

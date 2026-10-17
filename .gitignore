@@ -1,0 +1,161 @@
+# ============================================================================
+# LĂNG KÍNH HƯ KHÔNG (LKHK) — .NET 9 Blazor Server + SQLite + Cloudflare R2
+# Dùng tại thư mục gốc chứa LangKinhHuKhong.sln.
+# LƯU Ý: .gitignore không xóa file đã từng được git commit/tracked.
+# ============================================================================
+
+# 1. .NET / Visual Studio / Rider / VS Code
+**/bin/
+**/obj/
+**/.vs/
+.idea/
+.vscode/
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+*.rsuser
+*.pidb
+*.svd
+*.cache
+TestResults/
+**/TestResults/
+coverage/
+**/coverage/
+coverage.*
+*.coverage
+*.coveragexml
+
+R2-Local.example.ps1
+
+# 2. Publish / artifacts — build lại từ source; không đưa lên GitHub
+/publish/
+**/publish/
+/publish-*/
+**/publish-*/
+/artifacts/
+**/artifacts/
+/dist/
+**/dist/
+/out/
+**/out/
+/Release/
+/Debug/
+
+# 3. SQLite — giữ database và WAL/SHM ngoài source
+**/data/
+*.db
+*.db-shm
+*.db-wal
+*.db-journal
+*.db3
+*.sqlite
+*.sqlite3
+*.sqlite-shm
+*.sqlite-wal
+*.sqlite3-shm
+*.sqlite3-wal
+
+# 4. Dữ liệu audio private, preview và HLS (KHÔNG phải wwwroot)
+**/audio-private/
+**/covers-private/
+**/hls-private/
+**/upload-temp/
+**/temp-audio/
+**/tmp-audio/
+**/storage-cleanup/
+*.mp3
+*.wav
+*.flac
+*.m4a
+*.aac
+*.ogg
+*.opus
+*.m3u8
+# Không dùng *.ts: .ts cũng là mã nguồn TypeScript.
+segment-*.ts
+key.bin
+keyinfo.txt
+
+# 5. Khóa và dữ liệu bảo mật tuyệt đối không commit
+**/dataprotection-keys/
+**/DataProtection-Keys/
+**/keys-private/
+**/hls-keys/
+secrets.json
+**/secrets.json
+*.pem
+*.pfx
+*.p12
+*.p8
+*.key
+*.crt
+*.cer
+*.jks
+*.keystore
+
+# 6. Cấu hình môi trường/Cloudflare R2/DuckDNS (bao gồm local và production)
+.env
+.env.*
+**/.env
+**/.env.*
+!.env.example
+!**/.env.example
+*.env
+lkh.env
+R2-Local.ps1
+**/R2-Local.ps1
+*credentials*.json
+*credentials*.ini
+*service-account*.json
+**/appsettings.json
+**/appsettings.*.json
+!**/appsettings.example.json
+!**/appsettings.*.example.json
+
+# 7. Backup / archive / logs / runtime khác
+/backups/
+**/backups/
+/backup/
+**/backup/
+/lkh-web-backup-*/
+**/lkh-web-backup-*/
+/lkh-web-next/
+**/lkh-web-next/
+*.bak
+*.backup
+*.old
+*.tmp
+*.temp
+*.log
+**/logs/
+*.zip
+*.7z
+*.rar
+*.tar
+*.tar.gz
+*.tgz
+*.core
+core
+core.*
+
+# 8. Node/Tailwind dependencies và OS files
+node_modules/
+**/node_modules/
+.npm/
+.pnpm-store/
+.yarn/cache/
+.DS_Store
+Thumbs.db
+Desktop.ini
+*~
+*.swp
+*.swo
+
+# GIỮ LẠI TRONG REPOSITORY:
+# - LangKinhHuKhong.Web/**/*.cs, *.razor, *.csproj, schema.sql
+# - LangKinhHuKhong.Web/wwwroot/js/* và wwwroot/css/*
+# - wwwroot/images/lkh-logo.*, favicon.*, lkh-social.*
+# - styles/tailwind.input.css, CSS generated đã dùng trong site
+# - docs/*.md, tools/*.ps1, package.json, *.sln, global.json
+# - Chỉ commit template cấu hình KHÔNG chứa mật khẩu: appsettings.example.json

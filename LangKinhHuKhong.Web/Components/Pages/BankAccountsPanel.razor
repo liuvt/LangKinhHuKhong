@@ -1,0 +1,216 @@
+@inject IJSRuntime Js
+@inject BrowserApi Api
+
+<section class="bank-manager">
+    <div class="section-heading flex flex-wrap items-end justify-between gap-4">
+        <div>
+            <small>VIETQR / THANH TOÁN</small>
+            <h2>Quản lý tài khoản nhận tiền</h2>
+            <p>Thêm nhiều tài khoản, chọn một tài khoản mặc định cho đơn Premium mới. Đơn cũ không bị thay đổi.</p>
+        </div>
+        <button class="btn btn-outline" @onclick="Reload" disabled="@busy">↻ Tải lại</button>
+    </div>
+    @if (!string.IsNullOrWhiteSpace(message))
+    {
+        <div class="alert @(failed ? "alert-error" : "alert-success")">@message</div>
+    }
+    @if (loading)
+    {
+        <div class="panel">Đang tải tài khoản ngân hàng...</div>
+    }
+    else
+    {
+        <div class="bank-manager-layout">
+            <div class="panel rounded-2xl">
+                <div class="bank-manager-heading">
+                    <h3>Danh sách tài khoản (@receivers.Length)</h3>
+                    <button class="btn btn-primary" @onclick="NewAccount">+ Thêm tài khoản</button>
+                </div>
+                @if (receivers.Length == 0)
+                {
+                    <div class="bank-empty">Chưa có tài khoản nhận tiền. Hãy tạo tài khoản đầu tiên để bắt đầu nhận đơn Premium.</div>
+                }
+                @foreach (var item in receivers)
+                {
+                    var accountId = Ui.Str(item,"id");
+                    var active = Ui.Num(item,"is_active") == 1;
+                    var currentDefault = Ui.Num(item,"is_default") == 1;
+                    <div class="bank-account-card @(active ? "" : "bank-account-inactive")">
+                        <div class="bank-account-heading">
+                            <div><b>@Ui.Str(item,"label")</b><small>@Ui.Str(item,"bank_name") · BIN @Ui.Str(item,"bank_bin")</small></div>
+                            @if (currentDefault) { <span class="bank-pill bank-pill-default">Mặc định</span> }
+                            else if (!active) { <span class="bank-pill">Ngừng sử dụng</span> }
+                        </div>
+                        <p class="bank-account-number">@Ui.Str(item,"account_number")</p>
+                        <small class="bank-account-owner">@Ui.Str(item,"account_name")</small>
+                        <div class="bank-account-actions">
+                            <button class="btn btn-outline" @onclick="() => EditAccount(item)">Sửa</button>
+                            @if (active && !currentDefault)
+                            {
+                                <button class="btn btn-outline" disabled="@busy" @onclick="() => SetDefault(accountId)">Đặt mặc định</button>
+                            }
+                            @if (!currentDefault)
+                            {
+                                <button class="btn btn-outline" disabled="@busy" @onclick="() => ToggleAccount(accountId, !active)">@(active ? "Ngừng sử dụng" : "Kích hoạt")</button>
+                            }
+                        </div>
+                    </div>
+                }
+            </div>
+            <div class="panel form rounded-2xl">
+                <h3>@(editingId == "" ? "Thêm tài khoản nhận tiền" : "Chỉnh sửa tài khoản")</h3>
+                <label>Tên gợi nhớ
+                    <input @bind="form.Label" maxlength="80" placeholder="Ví dụ: MB Bank - Tài khoản chính" />
+                </label>
+                <label>Chọn ngân hàng từ VietQR
+                    <select @onchange="SelectCatalogBank">
+                        <option value="">-- Chọn ngân hàng --</option>
+                        @foreach (var option in bankCatalog)
+                        {
+                            <option value="@Ui.Str(option,"bin")">@Ui.Str(option,"name") (@Ui.Str(option,"bin"))</option>
+                        }
+                    </select>
+                </label>
+                @if (bankCatalog.Length == 0)
+                {
+                    <p class="hint">Không tải được danh sách VietQR hoặc chưa có mạng. Bạn vẫn có thể nhập thông tin thủ công bên dưới.</p>
+                }
+                <label>Mã BIN ngân hàng
+                    <input @bind="form.BankBin" inputmode="numeric" maxlength="8" placeholder="Ví dụ: 970422" />
+                </label>
+                <label>Tên ngân hàng
+                    <input @bind="form.BankName" maxlength="100" placeholder="MB Bank" />
+                </label>
+                <label>Số tài khoản nhận tiền
+                    <input @bind="form.AccountNumber" inputmode="numeric" maxlength="25" autocomplete="off" placeholder="Chỉ nhập chữ số" />
+                </label>
+                <label>Tên chủ tài khoản
+                    <input @bind="form.AccountName" maxlength="120" placeholder="Nhập đúng tên tài khoản ngân hàng" />
+                </label>
+                <p class="hint">VietQR chỉ tạo mã chuyển khoản. Tên chủ tài khoản nhập ở đây không được tự xác minh bằng API miễn phí; hãy kiểm tra với ngân hàng trước khi lưu.</p>
+                <div class="table-actions flex flex-wrap gap-2">
+                    <button class="btn btn-primary" disabled="@busy" @onclick="SaveAccount">@(busy ? "Đang lưu..." : (editingId == "" ? "Thêm tài khoản" : "Lưu thay đổi"))</button>
+                    <button class="btn btn-outline" @onclick="NewAccount">Nhập mới</button>
+                </div>
+                @if (HasValidPreview)
+                {
+                    <div class="bank-qr-preview">
+                        <h3>Xem trước VietQR</h3>
+                        <img src="@PreviewUrl" alt="QR tham khảo cho tài khoản đang nhập" loading="lazy" />
+                        <small>Chỉ là QR kiểm tra tài khoản, không chứa mã đơn hay số tiền. Khi User mua gói, QR sẽ lấy số tiền và mã đơn thực tế.</small>
+                    </div>
+                }
+            </div>
+        </div>
+        <div class="bank-manager-footnote">Tài khoản được chọn mặc định chỉ áp dụng cho <strong>đơn hàng mới</strong>. Các đơn đang chờ thanh toán vẫn giữ đúng số tài khoản, ngân hàng và tên người nhận tại lúc tạo đơn. Ngừng sử dụng không xóa lịch sử ngân hàng.</div>
+    }
+</section>
+
+@code {
+    private JsonElement[] receivers = [], bankCatalog = [];
+    private BankForm form = new();
+    private string editingId = "", message = "";
+    private bool loading = true, busy, failed;
+
+    private bool HasValidPreview => System.Text.RegularExpressions.Regex.IsMatch(form.BankBin ?? "", @"^\d{6,8}$")
+        && System.Text.RegularExpressions.Regex.IsMatch(form.AccountNumber ?? "", @"^\d{5,25}$")
+        && !string.IsNullOrWhiteSpace(form.AccountName);
+    private string PreviewUrl => $"https://img.vietqr.io/image/{Uri.EscapeDataString(form.BankBin)}-{Uri.EscapeDataString(form.AccountNumber)}-compact2.svg?accountName={Uri.EscapeDataString(form.AccountName)}";
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!firstRender) return;
+        await Reload();
+        StateHasChanged();
+    }
+    private async Task Reload()
+    {
+        loading = true;
+        try
+        {
+            receivers = Ui.Array(await Api.Get("/admin/bank-accounts"));
+            try
+            {
+                var catalog = await Api.Get("/admin/banks/catalog");
+                bankCatalog = Ui.Array(Ui.Property(catalog, "data"));
+            }
+            catch { bankCatalog = []; }
+            Notify("Đã tải tài khoản nhận tiền.");
+        }
+        catch (Exception ex) { Notify(ex.Message, true); }
+        finally { loading = false; }
+    }
+    private void Notify(string text, bool isError = false) { message = text; failed = isError; }
+    private void NewAccount() { form = new(); editingId = ""; message = ""; }
+    private void EditAccount(JsonElement bank)
+    {
+        editingId = Ui.Str(bank, "id");
+        form = new BankForm
+        {
+            Label = Ui.Str(bank,"label"), BankBin = Ui.Str(bank,"bank_bin"),
+            BankName = Ui.Str(bank,"bank_name"), AccountNumber = Ui.Str(bank,"account_number"),
+            AccountName = Ui.Str(bank,"account_name")
+        };
+        message = "";
+    }
+    private void SelectCatalogBank(ChangeEventArgs args)
+    {
+        var bin = Convert.ToString(args.Value) ?? "";
+        var item = bankCatalog.FirstOrDefault(x => Ui.Str(x,"bin") == bin);
+        if (item.ValueKind == JsonValueKind.Object)
+        {
+            form.BankBin = Ui.Str(item,"bin");
+            form.BankName = Ui.Str(item,"name");
+        }
+    }
+    private async Task SaveAccount()
+    {
+        if (string.IsNullOrWhiteSpace(form.BankBin) || string.IsNullOrWhiteSpace(form.AccountNumber) || string.IsNullOrWhiteSpace(form.AccountName))
+        { Notify("Nhập mã BIN, số tài khoản và tên chủ tài khoản trước khi lưu.", true); return; }
+        busy = true;
+        try
+        {
+            if (editingId == "") await Api.Post("/admin/bank-accounts", form);
+            else await Api.Put("/admin/bank-accounts/" + Uri.EscapeDataString(editingId), form);
+            receivers = Ui.Array(await Api.Get("/admin/bank-accounts"));
+            NewAccount();
+            Notify("Đã lưu tài khoản nhận tiền. Đơn hàng cũ được giữ nguyên.");
+        }
+        catch (Exception ex) { Notify(ex.Message, true); }
+        finally { busy = false; }
+    }
+    private async Task SetDefault(string id)
+    {
+        busy = true;
+        try
+        {
+            await Api.Post("/admin/bank-accounts/" + Uri.EscapeDataString(id) + "/default");
+            receivers = Ui.Array(await Api.Get("/admin/bank-accounts"));
+            Notify("Đã chọn tài khoản mặc định cho đơn hàng mới.");
+        }
+        catch (Exception ex) { Notify(ex.Message, true); }
+        finally { busy = false; }
+    }
+    private async Task ToggleAccount(string id, bool enable)
+    {
+        var confirmed = await Js.InvokeAsync<bool>("confirm", enable ? "Kích hoạt tài khoản nhận tiền này?" : "Ngừng sử dụng tài khoản này cho đơn hàng mới?");
+        if (!confirmed) return;
+        busy = true;
+        try
+        {
+            await Api.Post("/admin/bank-accounts/" + Uri.EscapeDataString(id) + "/activation", new { isActive = enable });
+            receivers = Ui.Array(await Api.Get("/admin/bank-accounts"));
+            Notify(enable ? "Đã kích hoạt tài khoản." : "Đã ngừng sử dụng tài khoản.");
+        }
+        catch (Exception ex) { Notify(ex.Message, true); }
+        finally { busy = false; }
+    }
+    private sealed class BankForm
+    {
+        public string Label { get; set; } = "";
+        public string BankBin { get; set; } = "";
+        public string BankName { get; set; } = "";
+        public string AccountNumber { get; set; } = "";
+        public string AccountName { get; set; } = "";
+    }
+}

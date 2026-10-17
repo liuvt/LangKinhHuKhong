@@ -1,0 +1,677 @@
+@page "/"
+@page "/thu-vien"
+@page "/the-loai/{GenreSlug}"
+@page "/truyen/{Slug}"
+@page "/lich-su"
+@page "/tai-khoan"
+@page "/premium"
+@page "/quan-tri"
+@inject BrowserApi Api
+@inject Database Database
+@inject NavigationManager Navigation
+@implements IAsyncDisposable
+
+<SeoHead @key="CurrentRoute()" Route="@CurrentRoute()" />
+
+<div class="app-layout min-h-screen bg-slate-50 text-slate-900">
+    @if (mobileMenuOpen)
+    {
+        <button class="nav-scrim" aria-label="Đóng menu điều hướng" @onclick='() => mobileMenuOpen = false'></button>
+    }
+    <aside class="sidebar @(mobileMenuOpen ? "is-open" : "")" aria-label="Điều hướng chính">
+        <a class="brand" href="/">
+            <span class="brand-symbol"><img class="lkh-brand-logo" src="/images/lkh-logo.webp" alt="Logo Lăng Kính Hư Không – nghe truyện audio" width="58" height="58" /></span>
+            <span class="brand-words">LĂNG KÍNH <strong>HƯ KHÔNG</strong><small>NGHE TRUYỆN · TRUYỆN AUDIO</small></span>
+        </a>
+        <div class="sidebar-inner">
+            <div class="side-caption">KHÁM PHÁ</div>
+            <NavLink class="nav-item" href="/" Match="NavLinkMatch.All"><AppIcon Name="home" /><span>Trang chủ</span></NavLink>
+            <NavLink class="@("nav-item" + (page == "story" ? " active" : ""))" href="/thu-vien" Match="NavLinkMatch.All"><AppIcon Name="library" /><span>Thư viện truyện</span></NavLink>
+            <NavLink class="nav-item" href="/lich-su" Match="NavLinkMatch.All"><AppIcon Name="history" /><span>Nghe gần đây</span></NavLink>
+            <div class="side-caption">TÀI KHOẢN</div>
+            <NavLink class="nav-item" href="/premium" Match="NavLinkMatch.All"><AppIcon Name="crown" /><span>@(isPremium ? "Premium của tôi" : "Gói Premium")</span>@if(!isPremium){<span class="nav-new">PRO</span>}</NavLink>
+            <NavLink class="nav-item" href="/tai-khoan" Match="NavLinkMatch.All"><AppIcon Name="user" /><span>Hồ sơ cá nhân</span></NavLink>
+            @if (isAdmin)
+            {
+                <NavLink class="nav-item" href="/quan-tri" Match="NavLinkMatch.All"><AppIcon Name="settings" /><span>Quản trị hệ thống</span></NavLink>
+            }
+        </div>
+        @if(isPremium)
+        {
+            <a class="sidebar-premium" href="/premium">
+                <span class="sidebar-premium-icon"><AppIcon Name="crown" /></span>
+                <b>Premium đang hoạt động</b>
+                <small>Hết hạn: @Ui.Date(Ui.Str(user,"premiumUntil"))</small>
+                <span class="sidebar-upgrade">Gia hạn thêm <AppIcon Name="arrow-right" Size="15" /></span>
+            </a>
+        }
+        else
+        {
+            <a class="sidebar-premium" href="/premium">
+                <span class="sidebar-premium-icon"><AppIcon Name="crown" /></span>
+                <b>Nghe không giới hạn</b>
+                <small>Mở khóa trọn vẹn mọi câu chuyện với Premium.</small>
+                <span class="sidebar-upgrade">Khám phá gói <AppIcon Name="arrow-right" Size="15" /></span>
+            </a>
+        }
+        <div class="side-footer"><span class="online-dot"></span> Lăng Kính Hư Không <small>© 2026 · Audio Library</small></div>
+    </aside>
+
+    <div class="main-column min-w-0">
+        <header class="topbar">
+            <div class="topbar-leading">
+                <button class="mobile-menu-btn" aria-label="Mở menu" @onclick='() => mobileMenuOpen = true'><AppIcon Name="menu" Size="22" /></button>
+                <a href="/" class="mobile-brand"><img src="/images/lkh-logo.webp" width="34" height="34" alt="Logo Lăng Kính Hư Không" /> Lăng Kính Hư Không</a>
+                <div class="desktop-greeting"><b>@NavigationHeading</b><small>@DateTime.Now.ToString("dddd, dd/MM/yyyy", new System.Globalization.CultureInfo("vi-VN"))</small></div>
+            </div>
+            <div class="topbar-actions">
+                <div class="searchbar"><AppIcon Name="search" Size="18" /><input aria-label="Tìm kiếm truyện" placeholder="Tìm tên truyện, tác giả..." @bind="search" @bind:event="oninput" /><a href="/thu-vien" aria-label="Xem kết quả tìm kiếm"><AppIcon Name="arrow-right" Size="17" /></a></div>
+                @if (isAuthenticated)
+                {
+                    <div class="top-account"><span class="account-avatar">@Ui.Str(user,"username").FirstOrDefault()</span><div><b>@Ui.Str(user,"username")</b><small>@(isPremium ? "Premium member" : "Thành viên Free")</small></div><button class="logout-btn" title="Đăng xuất" aria-label="Đăng xuất" @onclick="Logout"><AppIcon Name="log-out" Size="19" /></button></div>
+                }
+                else
+                {
+                    <button class="btn btn-outline login-button" @onclick='() => authMode = "login"'>Đăng nhập</button>
+                    <button class="btn btn-primary top-register" @onclick='() => authMode = "register"'>Đăng ký miễn phí</button>
+                }
+            </div>
+        </header>
+        <div class="main-content" @key="page">
+            @if (!string.IsNullOrEmpty(message)) { <div class="alert @(messageIsError ? "alert-error" : "alert-success")" role="status">@message <button aria-label="Đóng" @onclick='() => message = ""'>×</button></div> }
+            @if (loading) { <div class="panel skeleton">Đang tải dữ liệu...</div> }
+            else if (page == "home")
+            {
+                <section class="section top-section home-stories"><div class="section-heading flex flex-wrap items-end justify-between gap-4"><div><h1>Nghe truyện audio mới tại Lăng Kính Hư Không</h1><p>Nghe audio truyện tiên hiệp, kiếm hiệp, xuyên không và huyền huyễn bằng giọng đọc tiếng Việt.</p></div><a href="/thu-vien">Tất cả truyện →</a></div><div class="story-grid grid gap-5">@foreach (var story in newestStories.Take(8)) { <a class="story-card group transition-all duration-200" href="@StoryUrl(story)"><div class="cover"><span class="cover-fallback">◈</span>@if (!string.IsNullOrWhiteSpace(Ui.Str(story,"cover_url"))) { <img src="@Ui.Str(story,"cover_url")" alt="@Ui.Str(story,"title")" loading="lazy" /> }<span class="cover-play"><AppIcon Name="play" Size="19" /></span></div><h3>@Ui.Str(story,"title")</h3><p>@Ui.Str(story,"author")</p><div class="story-meta">@Ui.Str(story,"genres") · @Ui.Num(story,"episodeCount") tập</div><div class="story-trends"><span>◉ @Ui.Num(story,"listenerCount") người nghe</span> <span>★ @Ui.Str(story,"ratingAverage")</span></div></a> }</div>@if(stories.Length == 0){<div class="empty">Chưa có truyện nào được phát hành. Admin có thể tạo bộ truyện và tải MP3 tại Dashboard.</div>}</section>
+                @if (popularStories.Any(x=>Ui.Num(x,"listenerCount")>0))
+                {
+                    <section class="section"><div class="section-heading flex flex-wrap items-end justify-between gap-4"><div><small>ĐƯỢC QUAN TÂM</small><h2>Truyện xem nhiều nhất</h2><p>Chỉ tính tài khoản đã nghe thực tế hơn 5 phút trong bộ truyện.</p></div><a href="/thu-vien">Xem thư viện →</a></div>
+                        <div class="story-grid grid gap-5">@foreach(var story in popularStories.Where(x=>Ui.Num(x,"listenerCount")>0).Take(8))
+                        {<a class="story-card group transition-all duration-200" href="@StoryUrl(story)"><div class="cover"><span class="cover-fallback">◈</span>@if(!string.IsNullOrEmpty(Ui.Str(story,"cover_url"))){<img src="@Ui.Str(story,"cover_url")" alt="@Ui.Str(story,"title")" loading="lazy" />}</div>
+                        <h3>@Ui.Str(story,"title")</h3><p>@Ui.Str(story,"author")</p><div class="story-meta">@Ui.Str(story,"genres")</div><div class="story-trends"><span>◉ @Ui.Num(story,"listenerCount") người nghe</span><span>★ @Ui.Str(story,"ratingAverage")</span></div></a>}
+                        </div>
+                    </section>
+                }
+                @if (history.Length > 0) { <section class="section"><div class="section-heading flex flex-wrap items-end justify-between gap-4"><div><small>QUAY LẠI THẾ GIỚI TRUYỆN</small><h2>Nghe tiếp</h2></div><a href="/lich-su">Xem tất cả →</a></div><div class="history-list">@foreach(var item in history.Take(3)) { <button class="history-item" @onclick="() => OpenHistory(item)"><span class="history-icon"><AppIcon Name="play" Size="18" /></span><span><b>@Ui.Str(item,"story_title")</b><small>@Ui.Str(item,"episode_title") · @Ui.Duration(Ui.Num(item,"seconds"))</small></span><span class="icon-chevron">›</span></button> }</div></section> }
+            }
+            else if (page == "library")
+            {
+                <section class="section top-section"><div class="section-heading flex flex-wrap items-end justify-between gap-4"><div><small>KHÁM PHÁ</small><h1>@(genre == "" ? "Thư viện truyện audio Lăng Kính Hư Không" : $"Nghe truyện {GenreName} audio")</h1><p>Đọc giới thiệu truyện audio, chọn thể loại và nghe audio ngay tại Lăng Kính Hư Không.</p></div></div>
+                <div class="genre-tabs"><a class="genre @(genre==""?"selected":"")" href="/thu-vien">Tất cả</a>
+                    @foreach (var g in genreCatalog)
+                    {
+                        var genreSlug = Ui.Str(g, "slug");
+                        <a class="@(genre == genreSlug ? "genre selected" : "genre")"
+                                href="@($"/the-loai/{Uri.EscapeDataString(genreSlug)}")">@Ui.Str(g, "name")</a>
+                    }</div>
+                <div class="sort-tabs"><button class="genre @(sortMode=="new"?"selected":"")" @onclick='() => sortMode="new"'>Mới nhất</button><button class="genre @(sortMode=="popular"?"selected":"")" @onclick='() => sortMode="popular"'>Xem nhiều nhất</button></div>
+                <div class="story-grid grid gap-5">@foreach (var story in (sortMode=="popular" ? popularStories : newestStories).Where(Matches)) { <a class="story-card group transition-all duration-200" href="@StoryUrl(story)"><div class="cover"><span class="cover-fallback">◈</span>@if(!string.IsNullOrEmpty(Ui.Str(story,"cover_url"))){<img src="@Ui.Str(story,"cover_url")" alt="" loading="lazy"/>}</div><h3>@Ui.Str(story,"title")</h3><p>@Ui.Str(story,"author")</p><div class="story-meta">@Ui.Str(story,"genres") · @Ui.Num(story,"episodeCount") tập</div><div class="story-trends"><span>◉ @Ui.Num(story,"listenerCount") người nghe</span> <span>★ @Ui.Str(story,"ratingAverage")</span></div></a> }</div>
+                @if(!(sortMode=="popular" ? popularStories : newestStories).Any(Matches)){<div class="empty">Không có truyện phù hợp với bộ lọc.</div>}
+                </section>
+            }
+            else if (page == "story")
+            {
+                <a href="/thu-vien" class="back-link">← Quay lại thư viện</a>
+                @if (Ui.Property(detail,"story").ValueKind == JsonValueKind.Object)
+                {
+                    var st=Ui.Property(detail,"story");
+                    <div class="detail-panel">
+                        <div class="detail-hero">
+                            <div class="detail-cover">
+                                <span class="cover-fallback">◈</span>
+                                @if(!string.IsNullOrEmpty(Ui.Str(st,"cover_url")))
+                                {
+                                    <img src="@Ui.Str(st,"cover_url")" alt="@Ui.Str(st,"title")" />
+                                }
+                            </div>
+                            <div class="detail-intro">
+                                <span class="eyebrow">@Ui.Str(st,"genres")</span>
+                                <h1>@Ui.Str(st,"title")</h1>
+                                <p class="detail-author"><b>Tác giả:</b> @Ui.Str(st,"author")</p>
+                                <p class="detail-episode-count">@episodes.Length tập · @(isPremium || isAdmin ? "Nghe trọn vẹn" : "Nghe thử 5 phút mỗi tập")</p>
+                                <div class="story-trends"><span>◉ @Ui.Num(st,"listenerCount") người nghe hợp lệ</span><span>★ @Ui.Str(st,"ratingAverage") / 5 (@Ui.Num(st,"ratingCount") đánh giá)</span></div>
+                                @if(!string.IsNullOrWhiteSpace(Ui.Str(st,"description")))
+                                {
+                                    <p class="story-description-preview">@Ui.Str(st,"description")</p>
+                                    <button type="button" class="detail-readmore" aria-expanded="@showFullDescription" @onclick="ToggleStoryDescription">
+                                        @(showFullDescription ? "Thu gọn mô tả" : "Xem chi tiết nội dung")
+                                        <AppIcon Name="arrow-right" Size="15" />
+                                    </button>
+                                }
+                            </div>
+                        </div>
+                        <div class="detail-actionbar">
+                            @if(episodes.Length > 0)
+                            {
+                                <button class="btn btn-primary" @onclick="() => Play(episodes[0])"><AppIcon Name="play" Size="17" /> Nghe tập đầu tiên</button>
+                            }
+                            @if(!isPremium && !isAdmin)
+                            {
+                                <a class="btn btn-outline" href="/premium"><AppIcon Name="crown" Size="17" /> Nâng cấp Premium</a>
+                            }
+                        </div>
+                    </div>
+                    @if(showFullDescription && !string.IsNullOrWhiteSpace(Ui.Str(st,"description")))
+                    {
+                        <section class="story-full-description" aria-label="Nội dung giới thiệu đầy đủ">
+                            <div class="story-full-description-heading">
+                                <h2>Giới thiệu truyện</h2>
+                                <button type="button" class="detail-readmore" @onclick="ToggleStoryDescription">Thu gọn <AppIcon Name="arrow-right" Size="15" /></button>
+                            </div>
+                            <p>@Ui.Str(st,"description")</p>
+                        </section>
+                    }
+                    <section class="section"><div class="section-heading flex flex-wrap items-end justify-between gap-4"><div><small>PLAYLIST</small><h2>Danh sách tập</h2></div><span class="pill">@episodes.Length tập</span></div><div class="episode-list">@foreach(var episode in episodes){<button class="episode" @onclick="() => Play(episode)"><span class="episode-no">@Ui.Num(episode,"episode_number").ToString("00")</span><span class="episode-name"><b>@Ui.Str(episode,"title")</b><small>@Ui.Duration(Ui.Num(episode,"duration_seconds")) · @(isPremium || isAdmin ? "Toàn tập" : "Preview 05:00")</small></span><span class="play-circle"><AppIcon Name="play" Size="18" /></span></button>}</div></section>
+                    <section class="section story-reviews"><div class="section-heading"><div><small>THẢO LUẬN</small><h2>Đánh giá bộ truyện</h2><p>★ @Ui.Str(st,"ratingAverage") / 5 · @Ui.Num(st,"ratingCount") lượt đánh giá</p></div></div>
+                        @if(isAuthenticated)
+                        {
+                            <div class="panel form review-form"><h3>Đánh giá của bạn</h3><div class="rating-choices" role="group" aria-label="Chọn điểm đánh giá">
+                                @for(var score=1;score<=5;score++){var stars=score;<button class="rating-choice @(myReviewStars>=score?"chosen":"")" title="@($"{score} sao")" @onclick="() => myReviewStars=stars">★</button>}
+                            </div><label>Nội dung đánh giá<textarea @bind="myReviewBody" maxlength="1200" rows="3" placeholder="Cảm nhận của bạn về bộ truyện..."></textarea></label>
+                            <div class="table-actions"><button class="btn btn-primary" disabled="@busy" @onclick="SaveReview">Lưu đánh giá</button>
+                                @if(hasOwnReview){<button class="btn btn-outline" disabled="@busy" @onclick="DeleteReview">Xóa đánh giá</button>}
+                            </div></div>
+                        }
+                        else {<div class="empty">Đăng nhập để đánh giá và bình luận về bộ truyện.</div>}
+                        <div class="review-list">@foreach(var r in reviews){<article class="review-item"><div class="review-top"><b>@Ui.Str(r,"username")</b><span class="rating-stars">@(new string('★',Ui.Num(r,"stars")))</span><small>@Ui.Date(Ui.Str(r,"updated_at"))</small></div>
+                            <p>@Ui.Str(r,"body")</p></article>}</div>
+                        @if(reviews.Length==0){<div class="empty">Chưa có đánh giá nào. Hãy là người đầu tiên!</div>}
+                    </section>
+                } else {<div class="empty">Không tìm thấy truyện hoặc truyện chưa được phát hành.</div>}
+            }
+            else if (page == "history")
+            {
+                <section class="section top-section"><div class="section-heading flex flex-wrap items-end justify-between gap-4"><div><small>CÁ NHÂN</small><h1>Đã nghe gần đây</h1></div></div>
+                @if(!isAuthenticated){<div class="empty">Vui lòng đăng nhập để lưu lịch sử nghe.</div>}else if(history.Length==0){<div class="empty">Bạn chưa nghe tập truyện nào.</div>}else{<div class="history-list">@foreach(var item in history){<button class="history-item" @onclick="() => OpenHistory(item)"><span class="history-icon"><AppIcon Name="play" Size="18" /></span><span><b>@Ui.Str(item,"story_title")</b><small>@Ui.Str(item,"episode_title") · Đã nghe @Ui.Duration(Ui.Num(item,"seconds"))</small></span><span class="icon-chevron">›</span></button>}</div>}
+                </section>
+            }
+            else if (page == "account")
+            {
+                <section class="section top-section"><div class="section-heading flex flex-wrap items-end justify-between gap-4"><div><small>CÁ NHÂN</small><h1>Hồ sơ thành viên</h1></div></div>
+                @if(!isAuthenticated){<div class="empty">Hãy đăng nhập để xem và cập nhật hồ sơ.</div>}else{
+                <div class="two-column"><div class="panel form rounded-2xl"><h2>Thông tin cá nhân</h2><label>Tên đăng nhập<input value="@Ui.Str(user,"username")" disabled /></label><label>Họ và tên<input @bind="profileName" maxlength="100" /></label><label>Số điện thoại<input @bind="profilePhone" maxlength="25" /></label><label>Địa chỉ<textarea @bind="profileAddress" maxlength="300" rows="3"></textarea></label><button class="btn btn-primary" disabled="@busy" @onclick="SaveProfile">Lưu thông tin</button></div>
+                <div class="panel status-box"><div class="status-crown"><AppIcon Name="crown" Size="36" /></div><h2>Gói hiện tại</h2><h3>@(isPremium ? "Premium" : "Cơ bản · Free")</h3><p>@(isPremium ? $"Hiệu lực đến {Ui.Date(Ui.Str(user,"premiumUntil"))}" : "Nghe thử tối đa 5 phút đầu mỗi tập")</p><div class="meta-line"><span>Quyền hạn</span><b>@Ui.Str(user,"role")</b></div><div class="meta-line"><span>Trạng thái</span><b>@Ui.Str(user,"status")</b></div></div></div>
+                <div class="panel form rounded-2xl top-margin" style="max-width: 560px"><h2>Đổi mật khẩu tài khoản</h2><p class="hint">Đổi ngay mật khẩu Admin mặc định trước khi đưa website lên Internet.</p><label>Mật khẩu hiện tại<input type="password" @bind="currentPassword" autocomplete="current-password" /></label><label>Mật khẩu mới (ít nhất 12 ký tự)<input type="password" @bind="newPassword" maxlength="128" autocomplete="new-password" /></label><label>Nhập lại mật khẩu mới<input type="password" @bind="confirmPassword" maxlength="128" autocomplete="new-password" /></label><button class="btn btn-primary" disabled="@busy" @onclick="ChangePassword">Đổi mật khẩu</button></div>}
+                </section>
+            }
+            else if (page == "premium")
+            {
+                <section class="section top-section premium-membership-section">
+                    @if(isPremium)
+                    {
+                        <div class="premium-current panel rounded-2xl">
+                            <div class="premium-current-icon"><AppIcon Name="crown" Size="32" /></div>
+                            <div class="premium-current-content">
+                                <span class="premium-current-label">TÀI KHOẢN PREMIUM ĐANG HOẠT ĐỘNG</span>
+                                <h1>Premium của bạn</h1>
+                                <p>Được nghe trọn vẹn mọi tập truyện. Bạn có thể gia hạn bất kỳ lúc nào, thời gian mua thêm được cộng vào ngày hết hạn hiện tại.</p>
+                                <div class="premium-current-facts">
+                                    <div><small>Ngày hết hạn</small><strong>@Ui.Date(Ui.Str(user,"premiumUntil"))</strong></div>
+                                    <div><small>Trạng thái</small><strong class="premium-live">Đang hoạt động</strong></div>
+                                </div>
+                                <button class="btn btn-primary" disabled="@busy" @onclick="BuyPremium">@(busy ? "Đang xử lý..." : $"Gia hạn thêm {planMonths} tháng · {Ui.Money(planPrice)}")</button>
+                                <small class="premium-renew-note">Gia hạn qua VietQR, Admin kiểm tra tiền thực nhận trước khi cộng thêm thời gian.</small>
+                            </div>
+                        </div>
+                    }
+                    else
+                    {
+                        <div class="section-heading flex flex-wrap items-end justify-between gap-4"><div><small>THÀNH VIÊN</small><h1>Gói nghe truyện</h1><p>Mua Premium bằng VietQR, quản trị viên xác nhận thủ công sau khi nhận tiền.</p></div></div>
+                        <div class="pricing-grid">
+                            <div class="pricing-card rounded-2xl"><span class="pricing-symbol">♫</span><h2>Cơ bản</h2><div class="price">0đ</div><p>Miễn phí không giới hạn thời gian</p><ul><li>✓ Nghe thử 5 phút mỗi tập</li><li>✓ Lưu lịch sử nghe</li><li>✓ Khám phá thư viện</li></ul><span class="pill">Đang mở cho tất cả User</span></div>
+                            <div class="pricing-card featured rounded-2xl"><span class="eyebrow">✦ ĐỀ XUẤT</span><span class="pricing-symbol">♛</span><h2>Premium</h2><div class="price">@Ui.Money(planPrice) <small>/ @planMonths tháng</small></div><p>Trọn vẹn thế giới Audio</p><ul><li>✓ Nghe đầy đủ mọi tập</li><li>✓ Gia hạn cộng dồn thời gian</li><li>✓ Không mất tiến độ nghe</li></ul><button class="btn btn-gold" disabled="@busy" @onclick="BuyPremium">@(busy ? "Đang xử lý..." : "Đăng ký Premium →")</button></div>
+                        </div>
+                    }
+                    @if(isAuthenticated)
+                    {
+                        <div class="panel top-margin">
+                            <h2>Lịch sử mua gói &amp; Admin cấp/gia hạn</h2>
+                            <p class="hint">Phân biệt các lần bạn tự mua qua VietQR và các lần được Admin cấp hoặc gia hạn. Mục do Admin cấp không phát sinh giao dịch ngân hàng.</p>
+                            <div class="table-scroll"><table><thead><tr><th>Mã đơn</th><th>Nguồn</th><th>Thời hạn</th><th>Chi phí</th><th>Ngày tạo</th><th></th></tr></thead><tbody>
+                                @foreach(var order in orders)
+                                {
+                                    var adminGranted = Ui.Str(order,"order_type") == "AdminGrant";
+                                    var premiumEnd = Ui.Str(order,"premium_end_at");
+                                    var durationLabel = premiumEnd == "" ? Ui.Num(order,"duration_months").ToString() + " tháng" : "Đến " + Ui.Date(premiumEnd);
+                                    <tr>
+                                        <td class="mono">@Ui.Str(order,"code")</td>
+                                        <td><span class="pill @(adminGranted ? "premium-admin-badge" : "")">@(adminGranted ? "Admin cấp / gia hạn" : "Tự mua VietQR")</span><small class="order-subtitle">@(adminGranted ? Ui.Str(order,"grant_reason") : Ui.Str(order,"status"))</small></td>
+                                        <td>@durationLabel</td>
+                                        <td>@(adminGranted ? "Miễn phí (Admin cấp)" : Ui.Money(Ui.Num(order,"amount_vnd")))</td>
+                                        <td>@Ui.Date(Ui.Str(order,"created_at"))</td>
+                                        <td><button class="text-link" @onclick='() => LoadOrder(Ui.Str(order,"id"))'>Chi tiết</button></td>
+                                    </tr>
+                                }
+                            </tbody></table></div>
+                            @if(orders.Length==0){<p>Chưa có lịch sử giao dịch hoặc cấp gói.</p>}
+                        </div>
+                    }
+                    @if(Ui.Property(orderDetail,"id").ValueKind == JsonValueKind.String)
+                    {
+                        var adminGranted = Ui.Str(orderDetail,"orderType") == "AdminGrant";
+                        <div class="panel qr-panel">
+                            <h2>@(adminGranted ? "Chi tiết Admin cấp Premium" : "Đơn hàng " + Ui.Str(orderDetail,"code"))</h2>
+                            <div class="meta-line"><span>Mã hồ sơ</span><b class="mono">@Ui.Str(orderDetail,"code")</b></div>
+                            <div class="meta-line"><span>Nguồn</span><b>@(adminGranted ? "Admin cấp / gia hạn" : "Người dùng tự mua VietQR")</b></div>
+                            <div class="meta-line"><span>Thời gian cộng thêm</span><b>@Ui.Num(orderDetail,"durationMonths") tháng</b></div>
+                            @if(Ui.Str(orderDetail,"premiumStartAt") != "")
+                            { <div class="meta-line"><span>Bắt đầu cộng hạn</span><b>@Ui.Date(Ui.Str(orderDetail,"premiumStartAt"))</b></div> }
+                            @if(Ui.Str(orderDetail,"premiumEndAt") != "")
+                            { <div class="meta-line"><span>Hết hạn sau cập nhật</span><b>@Ui.Date(Ui.Str(orderDetail,"premiumEndAt"))</b></div> }
+                            @if(adminGranted)
+                            {
+                                <div class="premium-reason"><b>Lý do Admin cấp / gia hạn</b><p>@Ui.Str(orderDetail,"grantReason")</p></div>
+                                <div class="meta-line"><span>Người thực hiện</span><b>@Ui.Str(orderDetail,"grantedByName")</b></div>
+                                <p class="hint">Đây là quyền Premium được Admin cấp, không phải đơn đã chuyển khoản hoặc doanh thu.</p>
+                            }
+                            else
+                            {
+                                <div class="price">@Ui.Money(Ui.Num(orderDetail,"amountVnd"))</div>
+                                @if(Ui.Str(orderDetail,"qrUrl") != "" && (Ui.Str(orderDetail,"status")=="Pending" || Ui.Str(orderDetail,"status")=="Reviewing"))
+                                { <img class="qr-image" src="@Ui.Str(orderDetail,"qrUrl")" alt="VietQR chuyển khoản" /> }
+                                <p>Chỉ xác nhận sau khi Admin đối chiếu giao dịch thực nhận.</p>
+                                <div class="meta-line"><span>Ngân hàng</span><b>@Ui.Str(orderDetail,"bankName")</b></div>
+                                <div class="meta-line"><span>Số tài khoản</span><b>@Ui.Str(orderDetail,"accountNumber")</b></div>
+                                <div class="meta-line"><span>Chủ tài khoản</span><b>@Ui.Str(orderDetail,"accountName")</b></div>
+                                <div class="meta-line"><span>Nội dung CK</span><b class="mono">@Ui.Str(orderDetail,"code")</b></div>
+                                <div class="meta-line"><span>Trạng thái</span><b>@Ui.Str(orderDetail,"status")</b></div>
+                                <div class="meta-line"><span>Hạn thanh toán</span><b>@Ui.Date(Ui.Str(orderDetail,"expiresAt"))</b></div>
+                                @if(Ui.Str(orderDetail,"status")=="Pending")
+                                { <button class="btn btn-primary" @onclick="ReportPayment">Tôi đã chuyển khoản</button> }
+                            }
+                            <button class="btn btn-outline" @onclick='() => orderDetail = default'>Đóng</button>
+                        </div>
+                    }
+                </section>
+            }
+            else if (page == "admin")
+            {
+                @if(isAdmin){<AdminPanel />}
+                else {<div class="empty">Không có quyền vào trang quản trị. Bạn cần đăng nhập tài khoản Admin.</div>}
+            }
+        </div>
+        <footer class="footer">© 2026 Lăng Kính Hư Không · Truyện Audio · <span>Free 5 phút / Premium toàn tập</span></footer>
+    </div>
+</div>
+
+@if(Ui.Property(playing,"id").ValueKind == JsonValueKind.String)
+{
+    <div id="lkh-player-root" class="player-bar player-bar-custom shadow-2xl" role="region" aria-label="Trình phát Audio Truyện">
+        <div class="player-info">
+            <span class="player-art"><AppIcon Name="headphones" Size="21" /></span>
+            <div><b>@Ui.Str(playing,"title")</b><small>@(isPremium || isAdmin ? "Premium · Trọn tập" : "Free · Nghe thử 5 phút")</small></div>
+        </div>
+        <div class="player-controls">
+            <!-- No native 'controls' attribute: only the website's controls are visible. -->
+            <audio @key="PlayerId" id="lkh-player" data-lkh-src="@PlayerSource" data-lkh-mode="@(isPremium || isAdmin ? "hls" : "mp3")" preload="metadata" controlslist="nodownload noremoteplayback"></audio>
+            <div class="player-timeline">
+                <span id="lkh-audio-current" aria-label="Thời gian hiện tại">0:00</span>
+                <input id="lkh-audio-seek" type="range" min="0" max="1000" value="0" step="1" aria-label="Tua đến vị trí trong tập" />
+                <span id="lkh-audio-duration" aria-label="Tổng thời lượng">--:--</span>
+            </div>
+            <div class="player-buttons">
+                <button type="button" class="player-skip" data-lkh-skip="-10" aria-label="Lùi 10 giây" title="Lùi 10 giây">−10s</button>
+                <button type="button" class="player-toggle" id="lkh-audio-toggle" aria-label="Phát audio" title="Phát / Tạm dừng">
+                    <span class="icon-play"><AppIcon Name="play" Size="18" /></span>
+                    <span class="icon-pause" aria-hidden="true">Ⅱ</span>
+                </button>
+                <button type="button" class="player-skip" data-lkh-skip="10" aria-label="Tiến 10 giây" title="Tiến 10 giây">+10s</button>
+                <button type="button" class="player-rate" id="lkh-audio-rate" aria-label="Thay đổi tốc độ phát" title="Thay đổi tốc độ phát">1×</button>
+                <label class="player-auto-next" title="Phát tự động tập kế tiếp khi tập hiện tại kết thúc">
+                    <input type="checkbox" @bind="autoNextEnabled" aria-label="Tự phát tập tiếp theo" />
+                    <span>Tự phát tiếp</span>
+                </label>
+                <span class="player-volume"><AppIcon Name="volume" Size="16" /><input id="lkh-audio-volume" type="range" min="0" max="100" value="100" aria-label="Âm lượng" /></span>
+            </div>
+        </div>
+        <button type="button" class="player-close" title="Đóng trình phát" aria-label="Đóng trình phát" @onclick="ClosePlayer">×</button>
+    </div>
+}
+
+@if(authMode != "")
+{
+    <div class="overlay backdrop-blur-sm"><div class="auth-modal rounded-3xl shadow-2xl"><button class="modal-x" @onclick='() => authMode = ""'>×</button><div class="auth-heading"><span class="auth-logo"><AppIcon Name="headphones" Size="30" /></span><h2>@(authMode=="login"?"Chào mừng trở lại":"Tạo tài khoản miễn phí")</h2><p>Lăng Kính Hư Không · Audio Truyện</p></div><div class="auth-tabs"><button class="@(authMode=="login"?"chosen":"")" @onclick='() => authMode = "login"'>Đăng nhập</button><button class="@(authMode=="register"?"chosen":"")" @onclick='() => authMode = "register"'>Đăng ký</button></div>
+        <div class="form"><label>Tên đăng nhập<input @bind="username" minlength="3" maxlength="30" autocomplete="username" /></label><label>Mật khẩu<input type="password" @bind="password" maxlength="128" autocomplete="@(authMode=="login"?"current-password":"new-password")" /></label>
+        @if(authMode=="register"){<label>Họ và tên<input @bind="registerName" maxlength="100" /></label><label>Số điện thoại<input @bind="registerPhone" maxlength="25" /></label><label>Địa chỉ<textarea @bind="registerAddress" maxlength="300"></textarea></label>}
+        @if(!string.IsNullOrEmpty(authError)){<p class="error-text">@authError</p>}
+        <button class="btn btn-primary btn-wide" disabled="@busy" @onclick="SubmitAuth">@(busy ? "Đang xử lý..." : authMode=="login"?"Đăng nhập":"Tạo tài khoản Free")</button><p class="hint">Tài khoản Free nghe 5 phút đầu mỗi tập.</p></div></div></div>
+}
+
+@code {
+    [Parameter] public string? Slug { get; set; }
+    [Parameter] public string? GenreSlug { get; set; }
+    private string page="home", loadedRoute="__initial_route_pending__", search="", genre="", sortMode="new", authMode="", username="", password="", registerName="",registerPhone="",registerAddress="",authError="",message="";
+    private readonly SemaphoreSlim routeGate = new(1, 1);
+    private bool loading=true,busy=false,messageIsError=false,mobileMenuOpen=false,showFullDescription=false;
+    private JsonElement user,detail,playing,orderDetail;
+    private JsonElement[] stories=[],newestStories=[],popularStories=[],genreCatalog=[],reviews=[],history=[],episodes=[],orders=[];
+    // Giữ playlist của bộ truyện đang nghe ngay cả khi người dùng đổi trang.
+    private JsonElement[] playbackQueue=[];
+    private bool autoNextEnabled=true;
+    private DotNetObjectReference<Home>? playerCallback;
+    private string myReviewBody="";
+    private int myReviewStars=5;
+    private bool hasOwnReview=false;
+    private string profileName="",profilePhone="",profileAddress="",activePlayerId="";
+    private string currentPassword="", newPassword="", confirmPassword="";
+    private int planPrice=100000,planMonths=1;
+    private string GenreName
+    {
+        get
+        {
+            var found = genreCatalog.FirstOrDefault(g => Ui.Str(g, "slug") == genre);
+            var name = Ui.Str(found, "name");
+            return string.IsNullOrWhiteSpace(name) ? "theo thể loại" : name;
+        }
+    }
+    private bool isAuthenticated => Ui.Property(user,"id").ValueKind==JsonValueKind.String;
+    private bool isPremium => Ui.Bool(user,"isPremium");
+    private bool isAdmin => Ui.Str(user,"role")=="Admin";
+    private string NavigationHeading => page switch
+    {
+        "home" => "Trang chủ", "library" => "Thư viện truyện",
+        "history" => "Nghe gần đây", "story" => "Chi tiết bộ truyện",
+        "premium" => "Gói Premium", "account" => "Hồ sơ cá nhân",
+        "admin" => "Quản trị hệ thống", _ => "Lăng Kính Hư Không"
+    };
+    private string PlayerId => Ui.Str(playing,"id");
+    private string PlayerSource => "/api/episodes/" + Uri.EscapeDataString(PlayerId) +
+        (isPremium || isAdmin ? "/hls/index.m3u8" : "/stream");
+    private static string StoryUrl(JsonElement story) => "/truyen/" + Uri.EscapeDataString(Ui.Str(story,"slug"));
+    // A single Razor component handles several @page routes. OnParametersSet by itself
+    // does not reliably synchronize state when the same component instance is reused.
+    // Listen for URL changes explicitly, and let NavLink independently track active items.
+    protected override void OnInitialized()
+    {
+        Navigation.LocationChanged += HandleLocationChanged;
+        UpdatePageFromUrl();
+    }
+    protected override void OnParametersSet() => UpdatePageFromUrl();
+
+    // The original app only fetches public content from JavaScript after hydration.
+    // Prerender the public catalog/story with SQLite so crawlers receive real HTML,
+    // headings, descriptions and crawlable links before executing JavaScript.
+    protected override async Task OnInitializedAsync()
+    {
+        if (page is not ("home" or "library" or "story")) return;
+        try
+        {
+            await using var db = await Database.OpenAsync();
+            var published = await db.ListAsync(@"SELECT s.id,s.slug,s.title,s.author,s.genre,s.description,s.created_at,s.updated_at,
+                CASE WHEN s.cover_file<>'' THEN '/api/stories/' || s.id || '/cover' ELSE s.cover_url END AS cover_url,s.status,
+                COALESCE((SELECT group_concat(g.name,' | ') FROM story_genres sg JOIN genres g ON g.slug=sg.genre_slug
+                    WHERE sg.story_id=s.id),'') AS genres,
+                (SELECT COUNT(*) FROM episodes e WHERE e.story_id=s.id AND e.status='Published') AS episodeCount,
+                (SELECT COUNT(*) FROM story_listeners l WHERE l.story_id=s.id AND l.qualified_at IS NOT NULL) AS listenerCount,
+                (SELECT COUNT(*) FROM story_reviews r WHERE r.story_id=s.id AND r.status='Visible') AS ratingCount,
+                COALESCE((SELECT ROUND(AVG(r.stars),1) FROM story_reviews r WHERE r.story_id=s.id AND r.status='Visible'),0) AS ratingAverage
+                FROM stories s WHERE s.status='Published' ORDER BY s.created_at DESC LIMIT 200");
+            newestStories = published.Select(x => JsonSerializer.SerializeToElement(x)).ToArray();
+            popularStories = published.OrderByDescending(x => x.N("listenerCount"))
+                .Select(x => JsonSerializer.SerializeToElement(x)).ToArray();
+            stories = newestStories;
+            genreCatalog = (await db.ListAsync("SELECT slug,name FROM genres WHERE is_active=1 ORDER BY sort_order,name"))
+                .Select(x => JsonSerializer.SerializeToElement(x)).ToArray();
+            if (page == "story")
+            {
+                var route = CurrentRoute();
+                if (route.StartsWith("truyen/", StringComparison.OrdinalIgnoreCase))
+                {
+                    var slug = Uri.UnescapeDataString(route["truyen/".Length..]);
+                    var selected = published.FirstOrDefault(x => x.S("slug") == slug);
+                    // Direct story URLs beyond the 200-item home listing also work.
+                    if (selected is null)
+                        selected = await db.FirstAsync(@"SELECT s.id,s.slug,s.title,s.author,s.description,s.genre,s.created_at,s.updated_at,
+                            CASE WHEN s.cover_file<>'' THEN '/api/stories/' || s.id || '/cover' ELSE s.cover_url END AS cover_url,
+                            COALESCE((SELECT group_concat(g.name,' | ') FROM story_genres sg JOIN genres g ON g.slug=sg.genre_slug
+                                WHERE sg.story_id=s.id),'') AS genres,
+                            (SELECT COUNT(*) FROM story_listeners l WHERE l.story_id=s.id AND l.qualified_at IS NOT NULL) AS listenerCount,
+                            (SELECT COUNT(*) FROM story_reviews r WHERE r.story_id=s.id AND r.status='Visible') AS ratingCount,
+                            COALESCE((SELECT ROUND(AVG(r.stars),1) FROM story_reviews r WHERE r.story_id=s.id AND r.status='Visible'),0) AS ratingAverage
+                            FROM stories s WHERE s.slug=@slug AND s.status='Published'", ("@slug", slug));
+                    if (selected is not null)
+                    {
+                        var list = await db.ListAsync("SELECT id,title,episode_number,duration_seconds,created_at FROM episodes WHERE story_id=@id AND status='Published' ORDER BY episode_number", ("@id", selected.S("id")));
+                        detail = JsonSerializer.SerializeToElement(new { story = selected, episodes = list });
+                        episodes = Ui.Array(Ui.Property(detail, "episodes"));
+                    }
+                }
+            }
+            loading = false;
+        }
+        catch
+        {
+            // Runtime API loading still works if optional SSR catalog preloading fails.
+        }
+    }
+
+    private string CurrentRoute()
+        => Navigation.ToBaseRelativePath(Navigation.Uri).Split('?', '#')[0].Trim('/');
+
+    private void UpdatePageFromUrl()
+    {
+        var route = CurrentRoute();
+        mobileMenuOpen = false;
+        page = route switch
+        {
+            "" => "home", "thu-vien" => "library", "lich-su" => "history",
+            "tai-khoan" => "account", "premium" => "premium", "quan-tri" => "admin",
+            _ when route.StartsWith("truyen/", StringComparison.OrdinalIgnoreCase) => "story",
+            _ when route.StartsWith("the-loai/", StringComparison.OrdinalIgnoreCase) => "library",
+            _ => "home"
+        };
+        genre = route.StartsWith("the-loai/", StringComparison.OrdinalIgnoreCase)
+            ? Uri.UnescapeDataString(route["the-loai/".Length..])
+            : "";
+    }
+
+    private void HandleLocationChanged(object? sender, LocationChangedEventArgs args)
+    {
+        // Dispatch on the Blazor renderer synchronization context.
+        _ = InvokeAsync(LoadRouteIfChangedAsync);
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender)
+        {
+            playerCallback = DotNetObjectReference.Create(this);
+            await Api.BindAutoNext(playerCallback);
+        }
+
+        // First interactive render, browser refresh, or a missed route update.
+        if (loadedRoute != CurrentRoute())
+            await LoadRouteIfChangedAsync();
+
+        var id = Ui.Str(playing, "id");
+        if (id != "" && activePlayerId != id)
+        {
+            activePlayerId = id;
+            await Api.Listen(id);
+        }
+        if (id == "") activePlayerId = "";
+    }
+
+    private async Task LoadRouteIfChangedAsync()
+    {
+        // Serialize navigations so a slow response from an old route does not
+        // overwrite the data for the page opened after it.
+        await routeGate.WaitAsync();
+        try
+        {
+            var route = CurrentRoute();
+            if (loadedRoute == route) return;
+            loadedRoute = route;
+            UpdatePageFromUrl();
+            detail = default;
+            reviews=[]; hasOwnReview=false; myReviewBody=""; myReviewStars=5;
+            showFullDescription = false;
+            episodes = [];
+            orderDetail = default;
+            loading = true;
+            StateHasChanged();
+            await LoadPage();
+            StateHasChanged();
+        }
+        finally { routeGate.Release(); }
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        Navigation.LocationChanged -= HandleLocationChanged;
+        try { await Api.BindAutoNext(null); }
+        catch (JSDisconnectedException) { /* Browser disconnected. */ }
+        catch (InvalidOperationException) { /* Interactive render no longer available. */ }
+        finally { playerCallback?.Dispose(); }
+    }
+
+    private async Task LoadPage()
+    {
+        loading=true;
+        try
+        {
+            try {user=await Api.Get("/auth/me");}
+            catch {user=default;}
+            newestStories=Ui.Array(await Api.Get("/stories?sort=new"));
+            popularStories=Ui.Array(await Api.Get("/stories?sort=popular"));
+            stories=newestStories;
+            genreCatalog=Ui.Array(await Api.Get("/genres"));
+            if(isAuthenticated) { try{history=Ui.Array(await Api.Get("/listening"));}catch{history=[];} }
+            else history=[];
+            if(page=="story" && CurrentRoute().StartsWith("truyen/", StringComparison.OrdinalIgnoreCase))
+                await LoadStory(Uri.UnescapeDataString(CurrentRoute()["truyen/".Length..]));
+            if(page=="premium") await LoadPremium();
+            if(page=="account") {profileName=Ui.Str(user,"fullName");profilePhone=Ui.Str(user,"phone");profileAddress=Ui.Str(user,"address");}
+        }
+        catch(Exception e){Notice(e.Message,true);}
+        finally{loading=false;}
+    }
+    private void ToggleStoryDescription() => showFullDescription = !showFullDescription;
+
+    private async Task LoadStory(string slug)
+    {
+        try {detail=await Api.Get("/stories/"+Uri.EscapeDataString(slug));episodes=Ui.Array(Ui.Property(detail,"episodes"));await ReloadReviews(slug);}
+        catch(Exception e){detail=default;episodes=[];Notice(e.Message,true);}
+    }
+    private async Task LoadPremium()
+    {
+        var plans=Ui.Array(await Api.Get("/plans"));
+        var plan=plans.FirstOrDefault(x=>Ui.Str(x,"code")=="PREMIUM");
+        if(plan.ValueKind==JsonValueKind.Object){planPrice=Ui.Num(plan,"price_vnd");planMonths=Ui.Num(plan,"duration_months");}
+        if(isAuthenticated)orders=Ui.Array(await Api.Get("/orders"));
+    }
+    private bool Matches(JsonElement st) => (genre==""||Ui.Str(st,"genres").Split(" | ").Any(name=>genreCatalog.Any(g=>Ui.Str(g,"slug")==genre && Ui.Str(g,"name")==name)))
+        && (string.IsNullOrEmpty(search) || Ui.Str(st,"title").Contains(search,StringComparison.OrdinalIgnoreCase)||Ui.Str(st,"author").Contains(search,StringComparison.OrdinalIgnoreCase));
+    private async Task ReloadReviews(string slug)
+    {
+        reviews=Ui.Array(await Api.Get("/stories/"+Uri.EscapeDataString(slug)+"/reviews"));
+        var mine=reviews.FirstOrDefault(r=>Ui.Num(r,"is_mine")==1);
+        hasOwnReview=mine.ValueKind==JsonValueKind.Object;
+        if(hasOwnReview){myReviewStars=Ui.Num(mine,"stars");myReviewBody=Ui.Str(mine,"body");}
+    }
+    private async Task SaveReview()
+    {
+        if(!isAuthenticated){authMode="login";return;}
+        busy=true;
+        try
+        {
+            var slug=Ui.Str(Ui.Property(detail,"story"),"slug");
+            await Api.Put("/stories/"+Uri.EscapeDataString(slug)+"/reviews/me",new{stars=myReviewStars,body=myReviewBody});
+            await LoadStory(slug); Notice("Đã cập nhật đánh giá của bạn.");
+        }
+        catch(Exception e){Notice(e.Message,true);}finally{busy=false;}
+    }
+    private async Task DeleteReview()
+    {
+        busy=true;
+        try
+        {
+            var slug=Ui.Str(Ui.Property(detail,"story"),"slug");
+            await Api.Delete("/stories/"+Uri.EscapeDataString(slug)+"/reviews/me");
+            myReviewBody="";myReviewStars=5;hasOwnReview=false;
+            await LoadStory(slug); Notice("Đã xóa đánh giá của bạn.");
+        }
+        catch(Exception e){Notice(e.Message,true);}finally{busy=false;}
+    }
+    private void Notice(string text,bool error=false){message=text;messageIsError=error;}
+    private async Task SubmitAuth()
+    {
+        busy=true;authError="";
+        try
+        {
+            if(authMode=="login") { await Api.Post("/auth/login",new {username,password}); await Api.Reload(); }
+            else {await Api.Post("/auth/register",new {username,password,fullName=registerName,phone=registerPhone,address=registerAddress});authMode="login";password="";Notice("Đăng ký thành công. Hãy đăng nhập.");}
+        }
+        catch(Exception e){authError=e.Message;}
+        finally{busy=false;}
+    }
+    private async Task Logout(){try{await Api.Post("/auth/logout");await Api.Reload();}catch(Exception e){Notice(e.Message,true);}}
+    private async Task SaveProfile()
+    {
+        busy=true;
+        try{await Api.Put("/auth/profile",new {fullName=profileName,phone=profilePhone,address=profileAddress});user=await Api.Get("/auth/me");Notice("Đã cập nhật thông tin cá nhân.");}
+        catch(Exception e){Notice(e.Message,true);}
+        finally{busy=false;}
+    }
+    private async Task ChangePassword()
+    {
+        if (newPassword != confirmPassword) { Notice("Xác nhận mật khẩu mới không khớp.", true); return; }
+        if (newPassword.Length < 12 || newPassword.Length > 128) { Notice("Mật khẩu mới cần từ 12 đến 128 ký tự.", true); return; }
+        busy=true;
+        try
+        {
+            await Api.Post("/auth/change-password", new { currentPassword, newPassword });
+            currentPassword="";newPassword="";confirmPassword="";
+            await Api.Reload();
+        }
+        catch(Exception e) { Notice(e.Message,true); }
+        finally { busy=false; }
+    }
+    private async Task BuyPremium()
+    {
+        if(!isAuthenticated){authMode="login";return;}
+        busy=true;
+        try{orderDetail=await Api.Post("/orders");orders=Ui.Array(await Api.Get("/orders"));Notice("Đã tạo đơn hàng. Hãy kiểm tra đúng người nhận trước khi chuyển khoản.");}
+        catch(Exception e){Notice(e.Message,true);}
+        finally{busy=false;}
+    }
+    private async Task LoadOrder(string id){try{orderDetail=await Api.Get("/orders/"+Uri.EscapeDataString(id));}catch(Exception e){Notice(e.Message,true);}}
+    private async Task ReportPayment()
+    {
+        try{var id=Ui.Str(orderDetail,"id");await Api.Post("/orders/"+Uri.EscapeDataString(id)+"/reported");await LoadOrder(id);orders=Ui.Array(await Api.Get("/orders"));Notice("Đã gửi thông báo. Admin chỉ duyệt sau khi kiểm tra tiền thực nhận.");}
+        catch(Exception e){Notice(e.Message,true);}
+    }
+    // Called only when a real HTMLAudioElement 'ended' event fires; never on pause/error.
+    [JSInvokable]
+    public Task OnAudioEnded(string finishedEpisodeId) => InvokeAsync(() =>
+    {
+        if (!autoNextEnabled || !isAuthenticated ||
+            !string.Equals(PlayerId, finishedEpisodeId, StringComparison.Ordinal)) return;
+
+        var currentIndex = Array.FindIndex(playbackQueue,
+            ep => string.Equals(Ui.Str(ep, "id"), finishedEpisodeId, StringComparison.Ordinal));
+        if (currentIndex < 0) return;
+
+        // API /stories/{slug} returns only published episodes, ordered by episode_number.
+        // Do not wrap around to the beginning when the last published episode finishes.
+        for (var i = currentIndex + 1; i < playbackQueue.Length; i++)
+        {
+            if (string.IsNullOrWhiteSpace(Ui.Str(playbackQueue[i], "id"))) continue;
+            playing = playbackQueue[i];
+            activePlayerId = "";
+            StateHasChanged();
+            return;
+        }
+    });
+
+    private async Task ClosePlayer(){ playing=default; activePlayerId=""; await Api.StopAudio(); }
+    private void Play(JsonElement ep)
+    {
+        if (!isAuthenticated) { authMode="login"; return; }
+        // Copy the current story playlist before the route data can be replaced.
+        playbackQueue=episodes.ToArray();
+        playing=ep;
+        activePlayerId="";
+    }
+    private void OpenHistory(JsonElement item) => Navigation.NavigateTo("/truyen/"+Uri.EscapeDataString(Ui.Str(item,"slug")));
+}

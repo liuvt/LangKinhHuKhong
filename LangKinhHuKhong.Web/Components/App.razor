@@ -1,0 +1,22 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="utf-8" />
+    <base href="/" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#f7f9fd" />
+    <link rel="icon" type="image/png" sizes="48x48" href="/favicon-48.png" />
+    <link rel="icon" type="image/png" sizes="96x96" href="/favicon-96.png" />
+    <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png" />
+    <title>Nghe Truyện Audio Online | Lăng Kính Hư Không</title>
+    <link rel="stylesheet" href="css/tailwind.generated.css?v=1.8.0" />
+    <link rel="stylesheet" href="css/site.css?v=1.9.4.5" />
+    <HeadOutlet @rendermode="InteractiveServer" />
+</head>
+<body>
+    <Routes @rendermode="InteractiveServer" />
+    <!-- BrowserApi imports /js/lkh-interop.js as a JS module on first use.
+         Do not also load site.js as a classic script: it would initialize twice. -->
+    <script src="_framework/blazor.web.js"></script>
+</body>
+</html>

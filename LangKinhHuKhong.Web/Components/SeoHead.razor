@@ -1,0 +1,40 @@
+@using LangKinhHuKhong
+@inject SeoService Seo
+
+<PageTitle>@seo.Title</PageTitle>
+<HeadContent>
+    <meta name="description" content="@seo.Description" />
+    @* Meta keywords is provided for site metadata compatibility; Google Search ignores it. *@
+    @if (!string.IsNullOrWhiteSpace(seo.Keywords))
+    {
+        <meta name="keywords" content="@seo.Keywords" />
+    }
+    <meta name="robots" content="@seo.Robots" />
+    @if (seo.Robots.StartsWith("index", StringComparison.Ordinal))
+    {
+        <link rel="canonical" href="@seo.Canonical" />
+        <meta property="og:type" content="@seo.OgType" />
+        <meta property="og:site_name" content="Lăng Kính Hư Không" />
+        <meta property="og:locale" content="vi_VN" />
+        <meta property="og:title" content="@seo.Title" />
+        <meta property="og:description" content="@seo.Description" />
+        <meta property="og:url" content="@seo.Canonical" />
+        <meta property="og:image" content="@seo.Image" />
+        <meta name="twitter:card" content="summary_large_image" />
+        <meta name="twitter:title" content="@seo.Title" />
+        <meta name="twitter:description" content="@seo.Description" />
+        <meta name="twitter:image" content="@seo.Image" />
+        <script type="application/ld+json">@((MarkupString)seo.JsonLd)</script>
+    }
+</HeadContent>
+
+@code {
+    [Parameter] public string Route { get; set; } = "";
+    private SeoDocument seo = new("Lăng Kính Hư Không", "", "", "", "noindex,nofollow", "website", "");
+    protected override async Task OnParametersSetAsync()
+    {
+        // Route is an explicit parameter so internal Blazor navigation rebuilds <head>.
+        try { seo = await Seo.GetAsync(Route); }
+        catch { seo = new SeoDocument("Lăng Kính Hư Không", "", "", "", "noindex,nofollow", "website", ""); }
+    }
+}

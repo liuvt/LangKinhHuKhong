@@ -1,0 +1,7 @@
+<Router AppAssembly="@typeof(Routes).Assembly">
+  <Found Context="routeData">
+    <RouteView RouteData="@routeData" />
+    <FocusOnNavigate RouteData="@routeData" Selector="h1" />
+  </Found>
+  <NotFound><section class="shell"><h1>Không tìm thấy trang</h1><a href="/">Về trang chủ</a></section></NotFound>
+</Router>

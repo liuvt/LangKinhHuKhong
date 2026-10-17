@@ -1,0 +1,567 @@
+@inject BrowserApi Api
+
+<section class="section top-section admin-page">
+    <div class="section-heading"><div><small>ADMIN DASHBOARD</small><h1>Trung tâm quản trị</h1><p>Thành viên · Kho Audio · Gói Premium · Đơn hàng VietQR</p></div><button class="btn btn-outline" @onclick="Reload">↻ Tải lại</button></div>
+    @if (!string.IsNullOrEmpty(message)) {<div class="alert @(failed?"alert-error":"alert-success")">@message <button @onclick='() => message = ""'>×</button></div>}
+    <div class="stats-grid grid gap-4">
+        <div class="stat rounded-2xl"><small>THÀNH VIÊN</small><strong>@Ui.Str(stats,"users")</strong></div>
+        <div class="stat rounded-2xl"><small>BỘ TRUYỆN</small><strong>@Ui.Str(stats,"stories")</strong></div>
+        <div class="stat rounded-2xl"><small>TẬP AUDIO</small><strong>@Ui.Str(stats,"episodes")</strong></div>
+        <div class="stat rounded-2xl"><small>ĐƠN CHỜ</small><strong>@Ui.Str(stats,"pending")</strong></div>
+        <div class="stat rounded-2xl"><small>PREMIUM</small><strong>@Ui.Str(stats,"premium")</strong></div>
+        <div class="stat rounded-2xl"><small>ĐÃ ĐỐI SOÁT</small><strong class="stat-money">@Ui.Money(Ui.Num(stats,"income"))</strong></div>
+    </div>
+    <div class="admin-tabs flex flex-wrap gap-2">
+        <button class="@(tab=="stories"?"active":"")" @onclick='() => tab = "stories"'>Kho truyện</button>
+        <button class="@(tab=="genres"?"active":"")" @onclick='() => tab = "genres"'>Thể loại</button>
+        <button class="@(tab=="reviews"?"active":"")" @onclick='() => tab = "reviews"'>Đánh giá</button>
+        <button class="@(tab=="users"?"active":"")" @onclick='() => tab = "users"'>Thành viên</button>
+        <button class="@(tab=="orders"?"active":"")" @onclick='() => tab = "orders"'>Thanh toán</button>
+        <button class="@(tab=="banks"?"active":"")" @onclick='() => tab = "banks"'>Tài khoản QR</button>
+        <button class="@(tab=="settings"?"active":"")" @onclick='() => tab = "settings"'>Cấu hình gói</button>
+        <button class="@(tab=="audit"?"active":"")" @onclick='() => tab = "audit"'>Nhật ký</button>
+    </div>
+    @if (loading) {<div class="panel rounded-2xl">Đang tải bảng quản trị...</div>}
+    else if(tab=="stories")
+    {
+        <div class="story-workflow rounded-2xl">
+            <div class="workflow-step"><span class="workflow-number">1</span><div><b>Thông tin truyện</b><small>Tạo tên, thể loại, giới thiệu</small></div></div>
+            <div class="workflow-step"><span class="workflow-number">2</span><div><b>Ảnh đại diện</b><small>Upload hoặc thay ảnh trên R2</small></div></div>
+            <div class="workflow-step"><span class="workflow-number">3</span><div><b>Danh sách tập MP3</b><small>Thêm, sửa, thay file, xóa</small></div></div>
+        </div>
+        <div class="two-column admin-columns grid gap-5">
+            <div class="panel form rounded-2xl"><h2>@(editingStoryId == "" ? "Thêm bộ truyện" : "Chỉnh sửa bộ truyện")</h2>
+                <label>Tên truyện<input @bind="story.Title" @bind:event="oninput" maxlength="180"/></label>
+                <label>Slug (tự động, không dấu)<input readonly value="@(editingStoryId == "" ? Slugs.FromTitle(story.Title) : story.Slug)" /></label>
+                <p class="hint">Slug được tạo từ tên truyện và tự thêm -2, -3 nếu trùng; sau khi tạo sẽ giữ nguyên để bảo vệ URL cũ.</p>
+                <label>Tác giả<input @bind="story.Author" maxlength="120"/></label>
+                <div class="genre-picker"><b>Thể loại (chọn nhiều)</b><div class="genre-option-grid">
+                    @foreach(var g in genreRows.Where(x=>Ui.Num(x,"is_active")==1))
+                    {
+                        var key=Ui.Str(g,"slug");
+                        <label class="genre-option"><input type="checkbox" checked="@story.Genres.Contains(key)" @onchange="e => ToggleGenre(key, e.Value is bool value && value)" /><span>@Ui.Str(g,"name")</span></label>
+                    }
+                </div><small>Muốn bổ sung thể loại? Chọn mục Thể loại ở trên.</small></div>
+                <p class="hint">Ảnh đại diện được tải lên ở bước 2, lưu trực tiếp trên Cloudflare R2; không cần URL ảnh ngoài.</p>
+                <label>Giới thiệu<textarea @bind="story.Description" rows="4" maxlength="15000"></textarea></label>
+                <label>Trạng thái<select @bind="story.Status"><option value="Draft">Bản nháp</option><option value="Published">Phát hành</option><option value="Hidden">Ẩn</option></select></label>
+                <button class="btn btn-primary" disabled="@busy" @onclick="SaveStory">@(editingStoryId==""?"Tạo truyện":"Lưu cập nhật")</button>
+                @if(editingStoryId!=""){<button class="btn btn-outline" @onclick="NewStory">+ Thêm truyện mới</button>}
+            </div>
+            <div class="panel rounded-2xl"><h2>Danh sách bộ truyện (@storyRows.Length)</h2><div class="admin-story-list">@foreach(var s in storyRows){<div class="admin-story-item rounded-xl"><div><b>@Ui.Str(s,"title")</b><small>@Ui.Str(s,"slug") · @Ui.Str(s,"status") · @Ui.Str(s,"genre_keys").Replace("|", " / ")</small></div><div class="table-actions"><button class="btn btn-sm btn-outline" @onclick="() => EditStory(s)">Sửa</button><button class="btn btn-sm btn-primary" @onclick='() => SelectStory(Ui.Str(s,"id"))'>Tập MP3</button></div></div>}</div></div>
+        </div>
+        @if(!string.IsNullOrEmpty(activeStoryId))
+        {
+            <div class="panel top-margin"><h2>Ảnh đại diện &amp; tập MP3 · @(storyRows.Where(x=>Ui.Str(x,"id")==activeStoryId).Select(x=>Ui.Str(x,"title")).FirstOrDefault())</h2>
+                <p class="story-folder-label"><b>Thư mục R2:</b> <code>@ActiveStoryPrefix</code></p>
+                <h3 class="step-title"><span>2</span> Ảnh đại diện bộ truyện</h3>
+                <p class="hint">Khi thay ảnh, ứng dụng lưu ảnh mới trước, cập nhật tham chiếu trong SQLite, sau đó xóa object ảnh cũ trên R2. Nếu xóa lỗi, có thể dọn lại bên dưới.</p>
+                <div class="upload-grid cover-upload">
+                    <label>Ảnh bìa bộ truyện (JPG/PNG/WebP, tối đa 8MB)
+                        <input id="cover-file" type="file" accept=".jpg,.jpeg,.png,.webp,image/jpeg,image/png,image/webp" />
+                    </label>
+                    <button class="btn btn-primary" disabled="@busy" @onclick="UploadCover">@(string.IsNullOrWhiteSpace(Ui.Str(ActiveStory,"cover_file")) ? "↑ Upload ảnh bìa" : "↻ Thay ảnh bìa & dọn ảnh cũ")</button>
+                    @if(Ui.Str(ActiveStory,"cover_file").StartsWith("cover-local:",StringComparison.Ordinal) && Ui.Str(storageInfo,"mode")=="R2")
+                    { <button class="btn btn-outline" disabled="@busy" @onclick="MigrateCover">↑ Chuyển ảnh Local lên R2</button> }
+                </div>
+                @if(!string.IsNullOrWhiteSpace(ActiveCoverUrl))
+                { <img src="@ActiveCoverUrl" class="admin-story-cover" alt="Ảnh bìa truyện" /> }
+                <h3 class="step-title"><span>3</span> Upload và quản lý MP3</h3>
+                <div class="upload-grid"><label>Tên tập<input @bind="episodeTitle" maxlength="180" placeholder="Tập 1: Mở đầu" /></label><label>Số tập<input type="number" @bind="episodeNumber" min="1" max="100000" /></label><label>Chọn file MP3 (tối đa 250MB)<input type="file" id="episode-file" accept=".mp3,audio/mpeg" /></label><button class="btn btn-primary" disabled="@busy" @onclick="UploadAudio">@(uploadingAudio ? "⏳ Đang xử lý MP3..." : "↑ Upload & tạo preview")</button></div>
+                @if (uploadingAudio)
+                {
+                    <div class="episode-upload-progress" role="status" aria-live="polite">
+                        <span class="episode-upload-spinner" aria-hidden="true"></span>
+                        <div><b>@uploadStatus</b><small>MP3 có thể xuất hiện trên R2 trước khi FFmpeg, HLS và SQLite hoàn tất. Vui lòng chờ thông báo cuối cùng.</small></div>
+                    </div>
+                }
+                <div class="storage-cleanup-bar"><div><b>Dọn dung lượng lưu trữ</b><small>Còn @Ui.Num(storageInfo,"cleanupPending") file cũ trong hàng đợi xóa</small></div><button class="btn btn-sm btn-outline" disabled="@busy" @onclick="RetryCleanup">↻ Dọn file cũ</button></div>
+                <div class="r2-storage-notice">
+                    <div><b>Kho lưu trữ: @(Ui.Str(storageInfo,"mode")=="R2" ? "☁ Cloudflare R2 riêng tư" : "Ổ đĩa Local")</b>
+                    <small>@(Ui.Str(storageInfo,"mode")=="R2" ? "Bucket: " + Ui.Str(storageInfo,"bucket") + " · Image/, Episodes/, Previews/ trong mỗi bộ truyện." : "Chưa bật R2. Bật R2-Local.ps1 để upload vào thư mục riêng trên Cloudflare.")</small></div></div>
+                <p class="hint">Máy chủ dùng FFmpeg tạo bản preview 300 giây. Bucket R2 phải giữ Private; không bật r2.dev/Public Development URL.</p>
+                <div class="episode-list-toolbar">
+                    <span><b>Danh sách tập (@episodeRows.Length)</b><small>Danh sách tự đồng bộ sau khi upload xong</small></span>
+                    <button class="btn btn-sm btn-outline" disabled="@(busy || refreshingEpisodes)" @onclick="RefreshEpisodeList">@(refreshingEpisodes ? "⏳ Đang tải..." : "↻ Làm mới danh sách")</button>
+                </div>
+                <div class="table-scroll overflow-x-auto"><table><thead><tr><th>Số tập</th><th>Tiêu đề</th><th>Thời lượng</th><th>Trạng thái</th><th>Lưu trữ</th><th></th></tr></thead><tbody>@foreach(var ep in episodeRows){<tr @key='Ui.Str(ep,"id")' class="@(Ui.Str(ep,"id")==lastUploadedEpisodeId ? "episode-just-uploaded" : "")"><td>@Ui.Num(ep,"episode_number")</td><td>@Ui.Str(ep,"title")</td><td>@Ui.Duration(Ui.Num(ep,"duration_seconds"))</td><td>@Ui.Str(ep,"status")</td><td><span class="storage-pill @(Ui.Str(ep,"storage")=="R2" ? "storage-r2" : "storage-local")">@(Ui.Str(ep,"storage")=="R2" ? (Ui.Str(ep,"organization")=="Grouped" ? "☁ R2 / Truyện" : "☁ R2 cũ") : "💾 Local")</span><small class="hls-ready-label">@(Ui.Num(ep,"hls_ready")==1 ? "🔒 HLS Premium sẵn sàng" : "⚠ Chưa tạo HLS")</small></td><td><div class="table-actions"><button class="text-link" disabled="@busy" @onclick="() => EditEpisode(ep)">Sửa / Thay MP3</button>@if(Ui.Num(ep,"hls_ready")!=1) { <button class="btn btn-sm btn-outline" disabled="@busy" @onclick='() => PrepareHls(Ui.Str(ep,"id"))'>🔒 Tạo HLS</button> }<button class="btn btn-sm btn-danger-outline" disabled="@busy" @onclick="() => AskDeleteEpisode(ep)">Xóa</button>@if(Ui.Str(ep,"organization")!="Grouped" && Ui.Str(storageInfo,"mode")=="R2") { <button class="btn btn-sm btn-outline" disabled="@busy" @onclick='() => MigrateEpisode(Ui.Str(ep,"id"))'>↑ Vào thư mục truyện</button> }</div></td></tr>}</tbody></table></div>
+                @if(editEpisodeId!="")
+                {
+                    <div class="inline-editor episode-editor">
+                        <h3>Chỉnh sửa tập @editEpisodeNumber</h3>
+                        <div class="two-column"><label>Tiêu đề<input @bind="editEpisodeTitle" maxlength="180" /></label><label>Thứ tự<input type="number" @bind="editEpisodeNumber" min="1" max="100000" /></label></div>
+                        <label>Trạng thái<select @bind="editEpisodeStatus"><option value="Published">Phát hành</option><option value="Hidden">Ẩn</option></select></label>
+                        <button class="btn btn-primary" disabled="@busy" @onclick="SaveEpisode">Lưu thông tin tập</button>
+                        <div class="divider"></div>
+                        <h3>Thay file MP3 của tập</h3>
+                        <p class="hint">Chọn file mới sẽ cập nhật MP3 gốc và tạo lại Preview 5 phút cùng HLS mã hóa. MP3 cũ được xếp hàng dọn để tiết kiệm R2; tên tập và số thứ tự không thay đổi.</p>
+                        <label>File MP3 mới (tối đa 250MB)<input id="replace-episode-file" type="file" accept=".mp3,audio/mpeg" /></label>
+                        <button class="btn btn-outline" disabled="@busy" @onclick="ReplaceAudio">↻ Thay MP3 và tạo Preview mới</button>
+                        <button class="btn btn-outline" disabled="@busy" @onclick='() => editEpisodeId = ""'>Đóng</button>
+                    </div>
+                }
+                @if(deleteEpisodeId!="")
+                {
+                    <div class="delete-confirm-panel">
+                        <strong>Xác nhận xóa vĩnh viễn tập?</strong>
+                        <p>"@deleteEpisodeTitle" sẽ bị xóa khỏi danh sách và lịch sử nghe. File Full/Preview trên R2 cũng sẽ được xóa (hoặc xếp hàng thử lại). Không thể hoàn tác.</p>
+                        <button class="btn btn-danger" disabled="@busy" @onclick="DeleteEpisode">Xác nhận xóa tập</button>
+                        <button class="btn btn-outline" disabled="@busy" @onclick='() => deleteEpisodeId = ""'>Giữ lại tập</button>
+                    </div>
+                }
+            </div>
+        }
+    }
+    else if(tab=="genres")
+    {
+        <div class="panel form rounded-2xl"><h2>Danh mục thể loại</h2>
+            <p class="hint">Có thể thêm, đổi tên hoặc ẩn thể loại. Thể loại đang gắn với truyện không thể xóa trực tiếp.</p>
+            <div class="genre-admin-create"><label>Tạo thể loại mới<input @bind="newGenreName" maxlength="60" placeholder="Ví dụ: Sắc Hiệp" /></label><button class="btn btn-primary" @onclick="AddGenre" disabled="@busy">+ Thêm loại</button></div>
+            <div class="genre-admin-list">
+                @foreach (var g in genreRows)
+                {
+                    var genreSlug = Ui.Str(g, "slug");
+                    <div class="genre-admin-row"><div><b>@Ui.Str(g,"name")</b><small>@genreSlug</small></div>
+                    <span class="pill">@(Ui.Num(g,"is_active")==1 ? "Đang hiện" : "Đã ẩn")</span>
+                    <button class="btn btn-sm btn-outline" @onclick="() => EditGenre(g)">Sửa / Ẩn</button>
+                    <button class="btn btn-sm btn-danger-outline" @onclick="() => DeleteGenre(genreSlug)">Xóa</button></div>
+                }
+            </div>
+            @if(editGenreSlug!="")
+            {
+                <div class="inline-editor"><h3>Chỉnh sửa thể loại</h3><label>Tên thể loại<input @bind="editGenreName" maxlength="60" /></label>
+                    <label class="genre-option"><input type="checkbox" @bind="editGenreActive" /> Đang hoạt động</label>
+                    <button class="btn btn-primary" @onclick="SaveGenre" disabled="@busy">Lưu thay đổi</button>
+                    <button class="btn btn-outline" @onclick='() => editGenreSlug=""'>Hủy</button></div>
+            }
+        </div>
+    }
+    else if(tab=="reviews")
+    {
+        <div class="panel rounded-2xl"><h2>Đánh giá của thành viên</h2><p class="hint">Một người dùng chỉ được đánh giá một lần mỗi truyện. Admin có thể ẩn/hiện nội dung.</p>
+            <div class="review-admin-list">@foreach(var r in reviewRows)
+            {<div class="review-admin-item"><div><b>@Ui.Str(r,"story_title")</b> · @Ui.Str(r,"username") <span class="rating-stars">@(new string('★',Ui.Num(r,"stars")))</span>
+              <p>@Ui.Str(r,"body")</p><small>@Ui.Date(Ui.Str(r,"updated_at")) · @Ui.Str(r,"status")</small></div>
+              <button class="btn btn-sm btn-outline" @onclick="() => ModerateReview(r)">@(Ui.Str(r,"status")=="Visible"?"Ẩn":"Hiện")</button></div>}
+            </div>
+        </div>
+    }
+    else if(tab=="users")
+    {
+        <div class="panel rounded-2xl"><h2>Danh sách thành viên (@userRows.Length)</h2><div class="table-scroll overflow-x-auto"><table><thead><tr><th>Username</th><th>Họ tên</th><th>Quyền</th><th>Trạng thái</th><th>Premium đến</th><th></th></tr></thead><tbody>@foreach(var u in userRows){<tr><td class="mono">@Ui.Str(u,"username")</td><td>@Ui.Str(u,"full_name")</td><td>@Ui.Str(u,"role")</td><td><span class="pill">@Ui.Str(u,"status")</span></td><td>@Ui.Date(Ui.Str(u,"premiumUntil"))</td><td><button class="text-link" @onclick="() => EditUser(u)">Quản lý</button></td></tr>}</tbody></table></div></div>
+        @if(editUserId!="")
+        {
+            <div class="panel top-margin form"><h2>Chỉnh sửa: @editUsername</h2><div class="two-column"><label>Họ và tên<input @bind="editFullName" maxlength="100"/></label><label>Số điện thoại<input @bind="editPhone" maxlength="25"/></label></div><label>Địa chỉ<textarea @bind="editAddress" maxlength="300"></textarea></label><label>Trạng thái<select @bind="editStatus"><option value="Active">Hoạt động</option><option value="Locked">Khóa tài khoản</option><option value="Deleted">Soft delete</option></select></label><button class="btn btn-primary" @onclick="SaveUser" disabled="@busy">Lưu thay đổi</button>
+                <div class="divider"></div><h3>Admin cấp / gia hạn Premium</h3><p class="hint">Tự ghi thành một dòng trong lịch sử đơn hàng của User, có lý do và ngày hết hạn sau khi cộng thêm. Không tạo bill hoặc thanh toán giả.</p><div class="two-column"><label>Số tháng<input type="number" min="1" max="36" @bind="grantMonths"/></label><label>Lý do cấp / gia hạn<input @bind="grantReason" maxlength="300" placeholder="Ví dụ: Tặng Premium tri ân, hỗ trợ gia hạn..."/></label></div><button class="btn btn-gold" @onclick="GrantPremium" disabled="@busy">♛ Cấp / gia hạn Premium + lưu lịch sử</button>
+            </div>
+        }
+    }
+    else if(tab=="orders")
+    {
+        <div class="panel rounded-2xl"><h2>Đơn hàng &amp; lịch sử Admin cấp Premium</h2><p class="hint">Đơn tự mua cần đối soát ngân hàng; dòng Admin cấp/gia hạn chỉ ghi nhận quyền và lý do, không tính doanh thu, không có QR hay mã giao dịch ngân hàng.</p>
+        <div class="table-scroll overflow-x-auto"><table><thead><tr><th>Mã hồ sơ</th><th>Thành viên</th><th>Nguồn</th><th>Giá</th><th>Trạng thái</th><th>Thời gian</th><th></th></tr></thead><tbody>
+        @foreach(var o in orderRows)
+        {
+            var granted=Ui.Str(o,"order_type")=="AdminGrant";
+            <tr><td class="mono">@Ui.Str(o,"code")</td><td>@Ui.Str(o,"username")</td><td><span class="pill @(granted ? "premium-admin-badge" : "")">@(granted ? "Admin cấp" : "User tự mua")</span>@if(granted){<small class="order-subtitle">@Ui.Str(o,"grant_reason")</small>}</td><td>@(granted ? "0đ (cấp quyền)" : Ui.Money(Ui.Num(o,"amount_vnd")))</td><td>@(granted ? "Đã cấp / gia hạn" : Ui.Str(o,"status"))</td><td>@Ui.Date(Ui.Str(o,"created_at"))</td><td><button class="text-link" @onclick="() => SelectOrder(o)">@(granted ? "Chi tiết" : "Đối soát")</button></td></tr>
+        }
+        </tbody></table></div></div>
+        @if(activeOrderId!="")
+        {
+            <div class="panel top-margin form">
+                <h2>Hồ sơ @activeOrderCode</h2>
+                @if(activeOrderType=="AdminGrant")
+                {
+                    <div class="premium-reason"><b>Admin cấp / gia hạn Premium — không phát sinh thanh toán</b><p>@activeOrderReason</p></div>
+                    <div class="meta-line"><span>Số tháng cộng thêm</span><b>@activeOrderMonths tháng</b></div>
+                    <div class="meta-line"><span>Ngày hết hạn mới</span><b>@Ui.Date(activeOrderEnd)</b></div>
+                    <div class="meta-line"><span>Admin thực hiện</span><b>@activeOrderActor</b></div>
+                }
+                else
+                {
+                    <p>Số tiền: <b>@Ui.Money(activeOrderAmount)</b> · Trạng thái: <b>@activeOrderStatus</b></p>
+                    <div class="bank-order-snapshot"><b>Tài khoản cần đối soát</b><p>@activeOrderBank · @activeOrderAccountNumber · @activeOrderAccountName</p><small>Thông tin người nhận được lưu tại thời điểm tạo đơn.</small></div>
+                    @if(activeOrderStatus is "Pending" or "Reviewing")
+                    {
+                        <label>Mã giao dịch ngân hàng thực tế<input @bind="bankReference" maxlength="120" placeholder="Mã giao dịch duy nhất"/></label>
+                        <div class="table-actions"><button class="btn btn-primary" @onclick="ConfirmOrder" disabled="@busy">Xác nhận đã nhận tiền</button></div>
+                        <label>Lý do từ chối<input @bind="rejectReason" maxlength="300" /></label>
+                        <button class="btn btn-outline" @onclick="RejectOrder" disabled="@busy">Từ chối đơn hàng</button>
+                    }
+                    else { <p class="hint">Đơn đã xử lý, không thể xác nhận lại.</p> }
+                }
+                <button class="btn btn-outline" @onclick='() => activeOrderId = ""'>Đóng chi tiết</button>
+            </div>
+        }
+    }
+    else if(tab=="banks")
+    {
+        <BankAccountsPanel />
+    }
+    else if(tab=="settings")
+    {
+        <div class="panel form rounded-2xl" style="max-width:600px"><h2>Giá gói Premium</h2><label>Giá theo VNĐ / tháng<input type="number" @bind="premiumPrice" min="0" max="100000000" /></label><button class="btn btn-primary" @onclick="SavePrice">Cập nhật giá</button><p class="hint">Đơn đã tạo giữ nguyên giá tại thời điểm tạo QR. Tài khoản nhận tiền cấu hình ở mục Tài khoản QR.</p></div>
+    }
+    else if(tab=="audit")
+    {
+        <div class="panel rounded-2xl"><h2>Nhật ký quản trị gần đây</h2><div class="table-scroll overflow-x-auto"><table><thead><tr><th>Ngày</th><th>Hành động</th><th>Đối tượng</th><th>Thông tin</th></tr></thead><tbody>@foreach(var log in auditRows){<tr><td>@Ui.Date(Ui.Str(log,"created_at"))</td><td class="mono">@Ui.Str(log,"action")</td><td class="mono">@Ui.Str(log,"subject_id")</td><td>@Ui.Str(log,"details")</td></tr>}</tbody></table></div></div>
+    }
+</section>
+
+@code {
+    private string activeOrderBank="",activeOrderAccountNumber="",activeOrderAccountName="";
+    private string activeOrderType="",activeOrderReason="",activeOrderEnd="",activeOrderActor="";
+    private int activeOrderMonths=0;
+    private string tab="stories",message="",activeStoryId="",editingStoryId="",episodeTitle="",editEpisodeId="",editEpisodeTitle="",editEpisodeStatus="Published",deleteEpisodeId="",deleteEpisodeTitle="",editUserId="",editUsername="",editFullName="",editPhone="",editAddress="",editStatus="Active",grantReason="",activeOrderId="",activeOrderCode="",activeOrderStatus="",bankReference="",rejectReason="";
+    private int episodeNumber=1,editEpisodeNumber=1,grantMonths=1,premiumPrice=100000,activeOrderAmount=0;
+    private bool loading=true,busy=false,failed=false;
+    private bool uploadingAudio=false,refreshingEpisodes=false;
+    private string uploadStatus="",lastUploadedEpisodeId="";
+    private JsonElement stats,storageInfo;
+    private JsonElement[] storyRows=[],episodeRows=[],userRows=[],orderRows=[],auditRows=[],genreRows=[],reviewRows=[];
+    private string newGenreName="",editGenreSlug="",editGenreName="";
+    private bool editGenreActive=true;
+    private StoryForm story=new();
+    private JsonElement ActiveStory => storyRows.FirstOrDefault(x=>Ui.Str(x,"id")==activeStoryId);
+    private string ActiveStoryPrefix => Ui.Str(ActiveStory,"storage_prefix");
+    private string ActiveCoverUrl => string.IsNullOrEmpty(Ui.Str(ActiveStory,"cover_image_url"))
+        ? "" : Ui.Str(ActiveStory,"cover_image_url") + "?v=" + Uri.EscapeDataString(Ui.Str(ActiveStory,"updated_at"));
+    
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if(firstRender){await Reload();StateHasChanged();}
+    }
+    private async Task Reload()
+    {
+        loading=true;
+        try
+        {
+            stats=await Api.Get("/admin/stats");
+            storageInfo=await Api.Get("/admin/storage");
+            storyRows=Ui.Array(await Api.Get("/admin/stories"));
+            genreRows=Ui.Array(await Api.Get("/admin/genres"));
+            reviewRows=Ui.Array(await Api.Get("/admin/reviews"));
+            userRows=Ui.Array(await Api.Get("/admin/users"));
+            orderRows=Ui.Array(await Api.Get("/admin/orders"));
+            auditRows=Ui.Array(await Api.Get("/admin/audit"));
+            var p=Ui.Array(await Api.Get("/admin/plans")).FirstOrDefault();
+            if(p.ValueKind==JsonValueKind.Object) premiumPrice=Ui.Num(p,"price_vnd");
+            if(activeStoryId!="") await LoadEpisodes();
+        }
+        catch(Exception e){Notify(e.Message,true);}
+        finally{loading=false;}
+    }
+    private void Notify(string text,bool error=false){message=text;failed=error;}
+    private void NewStory(){editingStoryId="";story=new();}
+    private void EditStory(JsonElement s)
+    {
+        editingStoryId=Ui.Str(s,"id");
+        story=new(){Slug=Ui.Str(s,"slug"),Title=Ui.Str(s,"title"),Author=Ui.Str(s,"author"),Genre=Ui.Str(s,"genre"),
+            Genres=Ui.Str(s,"genre_keys").Split('|',StringSplitOptions.RemoveEmptyEntries),
+            Description=Ui.Str(s,"description"),CoverUrl=Ui.Str(s,"cover_url"),Status=Ui.Str(s,"status")};
+    }
+    private async Task SaveStory()
+    {
+        if(story.Genres.Length==0){Notify("Hãy chọn ít nhất một thể loại.",true);return;}
+        busy=true;
+        try
+        {
+            if(editingStoryId==""){var result=await Api.Post("/admin/stories",story);activeStoryId=Ui.Str(result,"id");}
+            else await Api.Put("/admin/stories/"+Uri.EscapeDataString(editingStoryId),story);
+            storyRows=Ui.Array(await Api.Get("/admin/stories"));
+            if(activeStoryId!="") await LoadEpisodes();
+            Notify("Đã lưu thông tin truyện. Tiếp theo, upload ảnh đại diện và các tập MP3 ở bước 2–3.");NewStory();
+        }
+        catch(Exception e){Notify(e.Message,true);}
+        finally{busy=false;}
+    }
+    private void ToggleGenre(string key,bool selected)
+    {
+        story.Genres=selected ? story.Genres.Append(key).Distinct().ToArray() : story.Genres.Where(g=>g!=key).ToArray();
+        story.Genre=genreRows.Where(g=>story.Genres.Contains(Ui.Str(g,"slug"))).Select(g=>Ui.Str(g,"name")).FirstOrDefault()??"";
+    }
+    private async Task AddGenre()
+    {
+        busy=true;
+        try{await Api.Post("/admin/genres",new{name=newGenreName});newGenreName="";genreRows=Ui.Array(await Api.Get("/admin/genres"));Notify("Đã tạo thể loại.");}
+        catch(Exception e){Notify(e.Message,true);}finally{busy=false;}
+    }
+    private void EditGenre(JsonElement g)
+    {editGenreSlug=Ui.Str(g,"slug");editGenreName=Ui.Str(g,"name");editGenreActive=Ui.Num(g,"is_active")==1;}
+    private async Task SaveGenre()
+    {
+        busy=true;
+        try{await Api.Put("/admin/genres/"+Uri.EscapeDataString(editGenreSlug),new{name=editGenreName,isActive=editGenreActive});
+            genreRows=Ui.Array(await Api.Get("/admin/genres"));editGenreSlug="";Notify("Đã cập nhật thể loại.");}
+        catch(Exception e){Notify(e.Message,true);}finally{busy=false;}
+    }
+    private async Task DeleteGenre(string slug)
+    {
+        busy=true;
+        try{await Api.Delete("/admin/genres/"+Uri.EscapeDataString(slug));
+            genreRows=Ui.Array(await Api.Get("/admin/genres"));Notify("Đã xóa thể loại chưa sử dụng.");}
+        catch(Exception e){Notify(e.Message,true);}finally{busy=false;}
+    }
+    private async Task ModerateReview(JsonElement review)
+    {
+        busy=true;
+        try{
+            var status=Ui.Str(review,"status")=="Visible"?"Hidden":"Visible";
+            await Api.Put("/admin/reviews/"+Uri.EscapeDataString(Ui.Str(review,"id"))+"/visibility",new{status});
+            reviewRows=Ui.Array(await Api.Get("/admin/reviews"));Notify("Đã thay đổi trạng thái đánh giá.");
+        }catch(Exception e){Notify(e.Message,true);}finally{busy=false;}
+    }
+    private async Task SelectStory(string id)
+    {
+        if (busy) return;
+        activeStoryId=id;
+        editEpisodeId="";
+        deleteEpisodeId="";
+        lastUploadedEpisodeId="";
+        episodeRows=[];
+        await LoadEpisodes();
+    }
+    // Returns false instead of announcing success if the list could not be loaded.
+    // Retain the active story snapshot to prevent an older request overwriting a newer selection.
+    private async Task<bool> LoadEpisodes(bool notifyOnError=true)
+    {
+        var storyId=activeStoryId;
+        if (string.IsNullOrWhiteSpace(storyId))
+        {
+            episodeRows=[];
+            await InvokeAsync(StateHasChanged);
+            return true;
+        }
+        try
+        {
+            var fresh=Ui.Array(await Api.Get("/admin/stories/"+Uri.EscapeDataString(storyId)+"/episodes"));
+            if (storyId!=activeStoryId) return false;
+            episodeRows=fresh;
+            await InvokeAsync(StateHasChanged);
+            return true;
+        }
+        catch(Exception e)
+        {
+            if (notifyOnError) Notify("Không tải được danh sách tập: "+e.Message,true);
+            return false;
+        }
+    }
+    private async Task RefreshEpisodeList()
+    {
+        if (busy || refreshingEpisodes || string.IsNullOrWhiteSpace(activeStoryId)) return;
+        refreshingEpisodes=true;
+        try
+        {
+            if (await LoadEpisodes(false)) Notify("Đã làm mới danh sách tập.");
+            else Notify("Không tải được danh sách tập. Vui lòng thử lại.",true);
+        }
+        finally
+        {
+            refreshingEpisodes=false;
+            await InvokeAsync(StateHasChanged);
+        }
+    }
+    // Verify the new record is actually visible after upload, rather than showing a false success.
+    private async Task<bool> ConfirmEpisodeVisible(string storyId, string episodeId)
+    {
+        if (string.IsNullOrWhiteSpace(episodeId)) return false;
+        for (var attempt=0; attempt<3; attempt++)
+        {
+            if (storyId!=activeStoryId) return false;
+            if (await LoadEpisodes(false) && episodeRows.Any(ep=>Ui.Str(ep,"id")==episodeId)) return true;
+            if (attempt<2) await Task.Delay(350);
+        }
+        return false;
+    }
+    private async Task UploadCover()
+    {
+        if(activeStoryId==""){Notify("Hãy chọn bộ truyện.",true);return;}
+        busy=true;
+        try
+        {
+            await Api.UploadCover(activeStoryId);
+            storyRows=Ui.Array(await Api.Get("/admin/stories"));
+            storageInfo=await Api.Get("/admin/storage");
+            Notify("Ảnh đại diện đã được cập nhật. Ảnh cũ đã được dọn hoặc đưa vào hàng đợi thử lại.");
+        }
+        catch(Exception e){Notify(e.Message,true);}
+        finally{busy=false;}
+    }
+    private async Task MigrateCover()
+    {
+        if(activeStoryId=="")return;
+        busy=true;
+        try
+        {
+            await Api.Post("/admin/stories/"+Uri.EscapeDataString(activeStoryId)+"/cover/migrate-r2");
+            storyRows=Ui.Array(await Api.Get("/admin/stories"));
+            Notify("Đã chuyển ảnh bìa Local lên R2, giữ lại bản cũ để sao lưu.");
+        }
+        catch(Exception e){Notify(e.Message,true);}
+        finally{busy=false;}
+    }
+    private async Task UploadAudio()
+    {
+        if (busy) return;
+        if (activeStoryId=="") { Notify("Chưa chọn bộ truyện.",true); return; }
+        var storyId=activeStoryId;
+        busy=true;
+        uploadingAudio=true;
+        uploadStatus="Đang tải MP3 và xử lý Preview / HLS trên máy chủ...";
+        await InvokeAsync(StateHasChanged);
+        try
+        {
+            // This request returns ONLY after the server finishes FFmpeg, R2 and SQLite INSERT.
+            var created=await Api.Upload(storyId,episodeTitle,episodeNumber);
+            var episodeId=Ui.Str(created,"id");
+            episodeNumber++;
+            episodeTitle="";
+            uploadStatus="Đã lưu MP3. Đang đồng bộ danh sách tập...";
+            await InvokeAsync(StateHasChanged);
+
+            var visible=await ConfirmEpisodeVisible(storyId,episodeId);
+            if (visible)
+            {
+                lastUploadedEpisodeId=episodeId;
+                try { stats=await Api.Get("/admin/stats"); } catch { /* Statistics are noncritical; episode list is already refreshed. */ }
+                Notify("Upload hoàn tất. Tập mới đã xuất hiện trong danh sách, Preview và HLS Premium đã sẵn sàng.");
+            }
+            else
+            {
+                Notify("Upload đã được máy chủ xác nhận, nhưng chưa thể đồng bộ danh sách. " +
+                       "Nhấn 'Làm mới danh sách' để kiểm tra. Không upload lại ngay để tránh trùng số tập.",true);
+            }
+        }
+        catch(Exception e)
+        {
+            Notify("Upload MP3 thất bại: "+e.Message,true);
+        }
+        finally
+        {
+            busy=false;
+            uploadingAudio=false;
+            uploadStatus="";
+            await InvokeAsync(StateHasChanged);
+        }
+    }
+    private async Task MigrateEpisode(string episodeId)
+    {
+        busy=true;
+        try
+        {
+            await Api.Post("/admin/episodes/" + Uri.EscapeDataString(episodeId) + "/migrate-r2");
+            await LoadEpisodes();
+            Notify("Đã sắp xếp Full/Preview vào thư mục bộ truyện trên R2. Các file cũ được giữ để sao lưu.");
+        }
+        catch(Exception ex){Notify(ex.Message,true);}
+        finally{busy=false;}
+    }
+    private async Task PrepareHls(string episodeId)
+    {
+        busy=true;
+        try
+        {
+            await Api.Post("/admin/episodes/"+Uri.EscapeDataString(episodeId)+"/prepare-hls");
+            await LoadEpisodes();
+            Notify("Đã tạo HLS AES-128 cho Premium. Free vẫn phát MP3 nghe thử.");
+        }
+        catch(Exception e){Notify(e.Message,true);}
+        finally{busy=false;}
+    }
+    private void EditEpisode(JsonElement ep)
+    {
+        deleteEpisodeId="";editEpisodeId=Ui.Str(ep,"id");editEpisodeTitle=Ui.Str(ep,"title");
+        editEpisodeNumber=Ui.Num(ep,"episode_number");editEpisodeStatus=Ui.Str(ep,"status");
+    }
+    private void AskDeleteEpisode(JsonElement ep)
+    {
+        editEpisodeId=""; deleteEpisodeId=Ui.Str(ep,"id");deleteEpisodeTitle=Ui.Str(ep,"title");
+    }
+    private async Task ReplaceAudio()
+    {
+        if(editEpisodeId=="")return;
+        busy=true;
+        try
+        {
+            await Api.ReplaceAudio(editEpisodeId);await LoadEpisodes();
+            storageInfo=await Api.Get("/admin/storage");
+            Notify("Đã thay MP3, cập nhật thời lượng và tạo lại preview. Audio cũ đã được đưa vào hàng đợi dọn.");
+        }
+        catch(Exception e){Notify(e.Message,true);}
+        finally{busy=false;}
+    }
+    private async Task DeleteEpisode()
+    {
+        if(deleteEpisodeId=="")return;
+        busy=true;
+        try
+        {
+            await Api.Delete("/admin/episodes/"+Uri.EscapeDataString(deleteEpisodeId));
+            deleteEpisodeId="";deleteEpisodeTitle="";
+            await LoadEpisodes();stats=await Api.Get("/admin/stats");
+            storageInfo=await Api.Get("/admin/storage");
+            Notify("Đã xóa tập MP3 và lịch sử nghe; các file cũ được dọn ở R2/Local.");
+        }
+        catch(Exception e){Notify(e.Message,true);}
+        finally{busy=false;}
+    }
+    private async Task RetryCleanup()
+    {
+        busy=true;
+        try
+        {
+            var result=await Api.Post("/admin/storage/cleanup");
+            storageInfo=await Api.Get("/admin/storage");
+            Notify($"Đã xóa {Ui.Num(result,"deleted")} file cũ. Còn {Ui.Num(result,"pending")} file chờ thử lại.");
+        }
+        catch(Exception e){Notify(e.Message,true);}
+        finally{busy=false;}
+    }
+    private async Task SaveEpisode()
+    {
+        try{await Api.Put("/admin/episodes/"+Uri.EscapeDataString(editEpisodeId),new{title=editEpisodeTitle,episodeNumber=editEpisodeNumber,status=editEpisodeStatus});editEpisodeId="";await LoadEpisodes();Notify("Đã cập nhật tập.");}
+        catch(Exception e){Notify(e.Message,true);}
+    }
+    private void EditUser(JsonElement u){editUserId=Ui.Str(u,"id");editUsername=Ui.Str(u,"username");editFullName=Ui.Str(u,"full_name");editPhone=Ui.Str(u,"phone");editAddress=Ui.Str(u,"address");editStatus=Ui.Str(u,"status");grantReason="";}
+    private async Task SaveUser()
+    {
+        busy=true;
+        try{await Api.Put("/admin/users/"+Uri.EscapeDataString(editUserId),new{fullName=editFullName,phone=editPhone,address=editAddress,status=editStatus});userRows=Ui.Array(await Api.Get("/admin/users"));Notify("Đã cập nhật thành viên.");}
+        catch(Exception e){Notify(e.Message,true);}finally{busy=false;}
+    }
+    private async Task GrantPremium()
+    {
+        busy=true;
+        try
+        {
+            var result=await Api.Post("/admin/users/"+Uri.EscapeDataString(editUserId)+"/premium",new{months=grantMonths,reason=grantReason});
+            userRows=Ui.Array(await Api.Get("/admin/users"));orderRows=Ui.Array(await Api.Get("/admin/orders"));
+            stats=await Api.Get("/admin/stats");
+            Notify("Đã cấp / gia hạn Premium. Lịch sử đơn hàng: " + Ui.Str(result,"orderCode") + ". User xem được lý do và nguồn Admin cấp.");
+            grantReason="";
+        }
+        catch(Exception e){Notify(e.Message,true);}finally{busy=false;}
+    }
+    private void SelectOrder(JsonElement o)
+    {
+        activeOrderId=Ui.Str(o,"id");activeOrderCode=Ui.Str(o,"code");activeOrderAmount=Ui.Num(o,"amount_vnd");activeOrderStatus=Ui.Str(o,"status");
+        activeOrderType=Ui.Str(o,"order_type");activeOrderReason=Ui.Str(o,"grant_reason");activeOrderEnd=Ui.Str(o,"premium_end_at");
+        activeOrderActor=Ui.Str(o,"granted_by_name");activeOrderMonths=Ui.Num(o,"duration_months");
+        activeOrderBank=Ui.Str(o,"bank_name");activeOrderAccountNumber=Ui.Str(o,"account_number");activeOrderAccountName=Ui.Str(o,"account_name");
+        bankReference="";rejectReason="";
+    }
+    private async Task ConfirmOrder()
+    {
+        busy=true;
+        try{await Api.Post("/admin/orders/"+Uri.EscapeDataString(activeOrderId)+"/confirm",new{bankReference});orderRows=Ui.Array(await Api.Get("/admin/orders"));activeOrderId="";stats=await Api.Get("/admin/stats");Notify("Đã xác nhận tiền thực nhận, kích hoạt Premium và lưu nhật ký.");}
+        catch(Exception e){Notify(e.Message,true);}finally{busy=false;}
+    }
+    private async Task RejectOrder()
+    {
+        busy=true;
+        try{await Api.Post("/admin/orders/"+Uri.EscapeDataString(activeOrderId)+"/reject",new{reason=rejectReason});orderRows=Ui.Array(await Api.Get("/admin/orders"));activeOrderId="";Notify("Đã từ chối đơn.");}
+        catch(Exception e){Notify(e.Message,true);}finally{busy=false;}
+    }
+    private async Task SavePrice(){try{await Api.Put("/admin/plans/premium",new{priceVnd=premiumPrice});Notify("Đã cập nhật giá Premium. Đơn cũ giữ nguyên giá.");}catch(Exception e){Notify(e.Message,true);}}
+    private sealed class StoryForm {public string Slug{get;set;}="";public string Title{get;set;}="";public string Author{get;set;}="";public string Genre{get;set;}="";public string[] Genres{get;set;}=[];public string Description{get;set;}="";public string CoverUrl{get;set;}="";public string Status{get;set;}="Draft";}
+}

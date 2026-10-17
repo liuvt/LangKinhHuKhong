@@ -1,0 +1,65 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="@Size" height="@Size" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.85" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" class="@Class">
+    @switch (Name)
+    {
+        case "home":
+            <path d="m3 10 9-7 9 7v10a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1z"/><path d="M9 21v-8h6v8"/>
+            break;
+        case "library":
+            <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/>
+            break;
+        case "history":
+            <circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>
+            break;
+        case "crown":
+            <path d="m2 8 5 4 5-8 5 8 5-4-2 12H4z"/><path d="M4 20h16"/>
+            break;
+        case "user":
+            <circle cx="12" cy="8" r="4"/><path d="M4 21c0-4 3-7 8-7s8 3 8 7"/>
+            break;
+        case "settings":
+            <path d="M12 3v3m0 12v3M3 12h3m12 0h3M5.6 5.6l2.1 2.1m8.6 8.6 2.1 2.1m0-12.8-2.1 2.1m-8.6 8.6-2.1 2.1"/><circle cx="12" cy="12" r="3"/>
+            break;
+        case "search":
+            <circle cx="10.8" cy="10.8" r="7.3"/><path d="m16 16 5 5"/>
+            break;
+        case "menu":
+            <path d="M4 7h16M4 12h16M4 17h16"/>
+            break;
+        case "headphones":
+            <path d="M3 14v-3a9 9 0 0 1 18 0v3"/><path d="M3 14h4v7H5a2 2 0 0 1-2-2zM21 14h-4v7h2a2 2 0 0 0 2-2z"/>
+            break;
+        case "play":
+            <path d="m9 6 10 6-10 6z" fill="currentColor" stroke="none"/>
+            break;
+        case "arrow-right":
+            <path d="M4 12h16m-6-6 6 6-6 6"/>
+            break;
+        case "log-out":
+            <path d="M10 17l5-5-5-5m5 5H3"/><path d="M13 3h6a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-6"/>
+            break;
+        case "volume":
+            <path d="m11 5-5 4H3v6h3l5 4zM15 9a4 4 0 0 1 0 6m3-9a8 8 0 0 1 0 12"/>
+            break;
+        case "sparkles":
+            <path d="m12 2 1.8 7.2L21 11l-7.2 1.8L12 20l-1.8-7.2L3 11l7.2-1.8zM20 18l.8 2.2L23 21l-2.2.8L20 24l-.8-2.2L17 21l2.2-.8z"/>
+            break;
+        case "shield":
+            <path d="m12 2 9 4v6c0 6-4.4 9-9 10-4.6-1-9-4-9-10V6z"/><path d="m8 12 3 3 5-6"/>
+            break;
+        case "check":
+            <path d="m5 12 5 5L20 7"/>
+            break;
+        case "close":
+            <path d="M5 5l14 14M19 5 5 19"/>
+            break;
+        default:
+            <circle cx="12" cy="12" r="9"/>
+            break;
+    }
+</svg>
+
+@code {
+    [Parameter] public string Name { get; set; } = "home";
+    [Parameter] public int Size { get; set; } = 20;
+    [Parameter] public string Class { get; set; } = "";
+}
