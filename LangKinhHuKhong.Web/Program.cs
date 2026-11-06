@@ -56,6 +56,7 @@ builder.Services.AddSignalR(o =>
 {
     o.ClientTimeoutInterval = TimeSpan.FromMinutes(2);
     o.KeepAliveInterval = TimeSpan.FromSeconds(15);
+    o.MaximumReceiveMessageSize = 10L * 1024 * 1024;
 });
 builder.Services.Configure<FormOptions>(o => o.MultipartBodyLengthLimit = 260L * 1024 * 1024);
 builder.Services.AddSingleton<IPasswordHasher<AppUser>, PasswordHasher<AppUser>>();
@@ -133,7 +134,9 @@ app.Use(async (ctx, next) =>
             (path.EndsWith("/episodes", StringComparison.OrdinalIgnoreCase) ||
              path.EndsWith("/cover", StringComparison.OrdinalIgnoreCase) ||
              path.EndsWith("/audio", StringComparison.OrdinalIgnoreCase) ||
-             path.EndsWith("/texts", StringComparison.OrdinalIgnoreCase));
+             path.EndsWith("/texts", StringComparison.OrdinalIgnoreCase) ||
+             path.EndsWith("/texts/create", StringComparison.OrdinalIgnoreCase) ||
+             path.Contains("/admin/texts/", StringComparison.OrdinalIgnoreCase));
         if (!isAdminUpload && ctx.Request.ContentLength is > 256 * 1024)
         {
             ctx.Response.StatusCode = StatusCodes.Status413PayloadTooLarge;
@@ -822,13 +825,90 @@ admin.MapGet("/stories/{id}/episodes", async Task<IResult> (string id, Database 
 });
 
 // Story text files (.md, .txt) stored directly on VPS disk (DataRoot/story-texts/<storyId>/).
-// Each story can have 0, 1, or many text files.
+// Full Admin-only CRUD + Online Notepad editor. Each story can have 0, 1, or many text files.
+admin.MapGet("/texts", async Task<IResult> (string? storyId, Database source) =>
+{
+    await using var db = await source.OpenAsync();
+    if (!string.IsNullOrWhiteSpace(storyId))
+    {
+        if (!Regex.IsMatch(storyId, "^[a-f0-9]{32}$")) return Results.NotFound();
+        return Results.Ok(await db.ListAsync(@"SELECT tf.id,tf.story_id,tf.title,tf.file_name,tf.extension,tf.size_bytes,tf.created_at,
+            CASE WHEN tf.updated_at<>'' THEN tf.updated_at ELSE tf.created_at END AS updated_at,
+            s.title AS story_title, s.slug AS story_slug
+            FROM story_text_files tf JOIN stories s ON s.id=tf.story_id
+            WHERE tf.story_id=@sid
+            ORDER BY COALESCE(NULLIF(tf.updated_at,''), tf.created_at) DESC, tf.file_name ASC", ("@sid", storyId)));
+    }
+    return Results.Ok(await db.ListAsync(@"SELECT tf.id,tf.story_id,tf.title,tf.file_name,tf.extension,tf.size_bytes,tf.created_at,
+        CASE WHEN tf.updated_at<>'' THEN tf.updated_at ELSE tf.created_at END AS updated_at,
+        s.title AS story_title, s.slug AS story_slug
+        FROM story_text_files tf JOIN stories s ON s.id=tf.story_id
+        ORDER BY COALESCE(NULLIF(tf.updated_at,''), tf.created_at) DESC, tf.file_name ASC LIMIT 1000"));
+});
+
 admin.MapGet("/stories/{id}/texts", async Task<IResult> (string id, Database source) =>
 {
     if (!Regex.IsMatch(id, "^[a-f0-9]{32}$")) return Results.NotFound();
     await using var db = await source.OpenAsync();
-    return Results.Ok(await db.ListAsync(@"SELECT id,story_id,title,file_name,extension,size_bytes,created_at
-        FROM story_text_files WHERE story_id=@id ORDER BY created_at DESC, file_name ASC", ("@id", id)));
+    return Results.Ok(await db.ListAsync(@"SELECT tf.id,tf.story_id,tf.title,tf.file_name,tf.extension,tf.size_bytes,tf.created_at,
+        CASE WHEN tf.updated_at<>'' THEN tf.updated_at ELSE tf.created_at END AS updated_at,
+        s.title AS story_title
+        FROM story_text_files tf JOIN stories s ON s.id=tf.story_id
+        WHERE tf.story_id=@id ORDER BY COALESCE(NULLIF(tf.updated_at,''), tf.created_at) DESC, tf.file_name ASC", ("@id", id)));
+});
+
+admin.MapPost("/stories/{id}/texts/create", async Task<IResult> (string id, TextCreateReq req, HttpContext ctx, Database source) =>
+{
+    if (!Regex.IsMatch(id, "^[a-f0-9]{32}$")) return Results.NotFound();
+    var ext = (req.Extension ?? ".txt").Trim().ToLowerInvariant();
+    if (!ext.StartsWith('.')) ext = "." + ext;
+    if (ext is not (".md" or ".txt")) return Bad("Định dạng file phải là .md hoặc .txt.");
+
+    var rawTitle = (req.Title ?? "").Trim();
+    var rawName = Path.GetFileName((req.FileName ?? "").Trim());
+    if (string.IsNullOrWhiteSpace(rawName))
+        rawName = (rawTitle != "" ? Slugs.FromTitle(rawTitle) : "ban-thao-" + DateTimeOffset.UtcNow.ToString("yyyyMMdd-HHmmss")) + ext;
+    if (!rawName.EndsWith(ext, StringComparison.OrdinalIgnoreCase))
+        rawName = Path.GetFileNameWithoutExtension(rawName) + ext;
+    if (rawName.Length is < 4 or > 200) return Bad("Tên file không hợp lệ.");
+    if (rawTitle == "") rawTitle = Path.GetFileNameWithoutExtension(rawName);
+    if (rawTitle.Length > 180) rawTitle = rawTitle[..180];
+
+    var body = req.Content ?? "";
+    if (body.Length > 25 * 1024 * 1024) return Bad("Nội dung văn bản vượt quá 25MB.");
+
+    await using var db = await source.OpenAsync();
+    var storyExists = await db.ValueAsync("SELECT 1 FROM stories WHERE id=@id", ("@id", id));
+    if (storyExists is null) return Results.NotFound();
+
+    var storyDir = Path.Combine(source.TextRoot, id);
+    Directory.CreateDirectory(storyDir);
+    var textId = Helpers.Id();
+    var storedName = textId + ext;
+    var destPath = Path.Combine(storyDir, storedName);
+    var utf8NoBom = new System.Text.UTF8Encoding(false);
+    await File.WriteAllTextAsync(destPath, body, utf8NoBom, ctx.RequestAborted);
+    var actualSize = new FileInfo(destPath).Length;
+    var now = Helpers.Now();
+
+    await db.ExecAsync(@"INSERT INTO story_text_files(id,story_id,title,file_name,stored_name,extension,size_bytes,created_at,updated_at)
+        VALUES(@id,@sid,@title,@fname,@sname,@ext,@size,@now,@now)",
+        ("@id", textId), ("@sid", id), ("@title", rawTitle), ("@fname", rawName),
+        ("@sname", storedName), ("@ext", ext), ("@size", actualSize), ("@now", now));
+
+    await Helpers.Audit(db, Helpers.UserId(ctx.User), "story.text_create", id,
+        $"textId={textId}; file={rawName}; size={actualSize}");
+    return Results.Ok(new
+    {
+        id = textId,
+        story_id = id,
+        title = rawTitle,
+        file_name = rawName,
+        extension = ext,
+        size_bytes = actualSize,
+        created_at = now,
+        updated_at = now
+    });
 });
 
 admin.MapPost("/stories/{id}/texts", async Task<IResult> (string id, HttpRequest request, HttpContext ctx, Database source) =>
@@ -891,8 +971,8 @@ admin.MapPost("/stories/{id}/texts", async Task<IResult> (string id, HttpRequest
             var now = Helpers.Now();
             var actualSize = new FileInfo(destPath).Length;
 
-            await db.ExecAsync(@"INSERT INTO story_text_files(id,story_id,title,file_name,stored_name,extension,size_bytes,created_at)
-                VALUES(@id,@sid,@title,@fname,@sname,@ext,@size,@now)",
+            await db.ExecAsync(@"INSERT INTO story_text_files(id,story_id,title,file_name,stored_name,extension,size_bytes,created_at,updated_at)
+                VALUES(@id,@sid,@title,@fname,@sname,@ext,@size,@now,@now)",
                 ("@id", textId), ("@sid", id), ("@title", itemTitle), ("@fname", rawName),
                 ("@sname", storedName), ("@ext", ext), ("@size", actualSize), ("@now", now));
 
@@ -904,7 +984,8 @@ admin.MapPost("/stories/{id}/texts", async Task<IResult> (string id, HttpRequest
                 file_name = rawName,
                 extension = ext,
                 size_bytes = actualSize,
-                created_at = now
+                created_at = now,
+                updated_at = now
             });
         }
 
@@ -931,15 +1012,17 @@ admin.MapGet("/texts/{textId}/content", async Task<IResult> (string textId, Http
 {
     if (!Regex.IsMatch(textId, "^[a-f0-9]{32}$")) return Results.NotFound();
     await using var db = await source.OpenAsync();
-    var row = await db.FirstAsync("SELECT * FROM story_text_files WHERE id=@id", ("@id", textId));
+    var row = await db.FirstAsync(@"SELECT tf.*, s.title AS story_title
+        FROM story_text_files tf JOIN stories s ON s.id=tf.story_id
+        WHERE tf.id=@id", ("@id", textId));
     if (row is null) return Results.NotFound();
     var path = Path.Combine(source.TextRoot, row.S("story_id"), row.S("stored_name"));
     if (!File.Exists(path)) return Results.NotFound(new { error = "Không tìm thấy file chữ trên ổ đĩa VPS." });
 
-    const int maxPreviewBytes = 256 * 1024; // 256 KB preview in browser
+    const int maxEditBytes = 25 * 1024 * 1024; // Up to 25 MB editable in Online Notepad
     var info = new FileInfo(path);
     await using var fs = File.OpenRead(path);
-    var toRead = (int)Math.Min(info.Length, maxPreviewBytes);
+    var toRead = (int)Math.Min(info.Length, maxEditBytes);
     var buffer = new byte[toRead];
     var read = await fs.ReadAsync(buffer.AsMemory(0, toRead), ctx.RequestAborted);
     using var ms = new MemoryStream(buffer, 0, read);
@@ -950,13 +1033,82 @@ admin.MapGet("/texts/{textId}/content", async Task<IResult> (string textId, Http
     {
         id = row.S("id"),
         storyId = row.S("story_id"),
+        storyTitle = row.S("story_title"),
         title = row.S("title"),
         fileName = row.S("file_name"),
         extension = row.S("extension"),
         sizeBytes = row.N("size_bytes"),
         createdAt = row.S("created_at"),
-        truncated = info.Length > maxPreviewBytes,
+        updatedAt = row.S("updated_at") != "" ? row.S("updated_at") : row.S("created_at"),
+        truncated = info.Length > maxEditBytes,
         content
+    });
+});
+
+admin.MapPut("/texts/{textId}", async Task<IResult> (string textId, TextUpdateReq req, HttpContext ctx, Database source) =>
+{
+    if (!Regex.IsMatch(textId, "^[a-f0-9]{32}$")) return Results.NotFound();
+    await using var db = await source.OpenAsync();
+    var old = await db.FirstAsync("SELECT * FROM story_text_files WHERE id=@id", ("@id", textId));
+    if (old is null) return Results.NotFound();
+
+    var targetStoryId = string.IsNullOrWhiteSpace(req.StoryId) ? old.S("story_id") : req.StoryId.Trim();
+    if (!Regex.IsMatch(targetStoryId, "^[a-f0-9]{32}$")) return Bad("Bộ truyện không hợp lệ.");
+    if (await db.ValueAsync("SELECT 1 FROM stories WHERE id=@id", ("@id", targetStoryId)) is null)
+        return Bad("Không tìm thấy bộ truyện đích.");
+
+    var ext = string.IsNullOrWhiteSpace(req.Extension) ? old.S("extension") : req.Extension.Trim().ToLowerInvariant();
+    if (!ext.StartsWith('.')) ext = "." + ext;
+    if (ext is not (".md" or ".txt")) return Bad("Định dạng file phải là .md hoặc .txt.");
+
+    var rawName = Path.GetFileName((req.FileName ?? old.S("file_name")).Trim());
+    if (string.IsNullOrWhiteSpace(rawName)) rawName = textId + ext;
+    if (!rawName.EndsWith(ext, StringComparison.OrdinalIgnoreCase))
+        rawName = Path.GetFileNameWithoutExtension(rawName) + ext;
+    if (rawName.Length is < 4 or > 200) return Bad("Tên file không hợp lệ.");
+
+    var rawTitle = (req.Title ?? "").Trim();
+    if (rawTitle == "") rawTitle = Path.GetFileNameWithoutExtension(rawName);
+    if (rawTitle.Length > 180) rawTitle = rawTitle[..180];
+
+    var body = req.Content ?? "";
+    if (body.Length > 25 * 1024 * 1024) return Bad("Nội dung văn bản vượt quá giới hạn 25MB.");
+
+    var oldPath = Path.Combine(source.TextRoot, old.S("story_id"), old.S("stored_name"));
+    var targetDir = Path.Combine(source.TextRoot, targetStoryId);
+    Directory.CreateDirectory(targetDir);
+    var newStoredName = textId + ext;
+    var newPath = Path.Combine(targetDir, newStoredName);
+    var tempPath = newPath + ".tmp-" + Guid.NewGuid().ToString("N")[..8];
+
+    var utf8NoBom = new System.Text.UTF8Encoding(false);
+    await File.WriteAllTextAsync(tempPath, body, utf8NoBom, ctx.RequestAborted);
+    File.Move(tempPath, newPath, overwrite: true);
+    if (!string.Equals(oldPath, newPath, StringComparison.Ordinal) && File.Exists(oldPath))
+    {
+        try { File.Delete(oldPath); } catch { }
+    }
+
+    var actualSize = new FileInfo(newPath).Length;
+    var now = Helpers.Now();
+    await db.ExecAsync(@"UPDATE story_text_files
+        SET story_id=@sid, title=@title, file_name=@fname, stored_name=@sname, extension=@ext, size_bytes=@size, updated_at=@now
+        WHERE id=@id",
+        ("@sid", targetStoryId), ("@title", rawTitle), ("@fname", rawName),
+        ("@sname", newStoredName), ("@ext", ext), ("@size", actualSize), ("@now", now), ("@id", textId));
+
+    await Helpers.Audit(db, Helpers.UserId(ctx.User), "story.text_update", targetStoryId,
+        $"textId={textId}; file={rawName}; size={actualSize}");
+    return Results.Ok(new
+    {
+        message = "Đã lưu nội dung file chữ lên VPS.",
+        id = textId,
+        storyId = targetStoryId,
+        title = rawTitle,
+        fileName = rawName,
+        extension = ext,
+        sizeBytes = actualSize,
+        updatedAt = now
     });
 });
 
@@ -1789,3 +1941,5 @@ public record RejectReq(string Reason);
 
 public record BankAccountReq(string Label,string BankBin,string BankName,string AccountNumber,string AccountName);
 public record BankActivationReq(bool IsActive);
+public record TextCreateReq(string Title, string FileName, string Extension, string Content);
+public record TextUpdateReq(string StoryId, string Title, string FileName, string Extension, string Content);

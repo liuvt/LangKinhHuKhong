@@ -13,6 +13,7 @@
     </div>
     <div class="admin-tabs flex flex-wrap gap-2">
         <button class="@(tab=="stories"?"active":"")" @onclick='() => tab = "stories"'>Kho truyện</button>
+        <button class="@(tab=="notepad"?"active":"")" @onclick="SwitchToNotepadTab">📝 Bản thảo (.md/.txt)</button>
         <button class="@(tab=="genres"?"active":"")" @onclick='() => tab = "genres"'>Thể loại</button>
         <button class="@(tab=="reviews"?"active":"")" @onclick='() => tab = "reviews"'>Đánh giá</button>
         <button class="@(tab=="users"?"active":"")" @onclick='() => tab = "users"'>Thành viên</button>
@@ -125,6 +126,7 @@
                 </div>
                 <div class="episode-list-toolbar">
                     <span><b>Danh sách file chữ trên VPS (@textFileRows.Length)</b><small>Lưu trữ nội bộ tại thư mục dữ liệu VPS của bộ truyện</small></span>
+                    <button class="btn btn-sm btn-outline" disabled="@busy" @onclick="() => StartNewNotepadForStory(activeStoryId)">+ Soạn file mới bằng Notepad Online</button>
                 </div>
                 @if (textFileRows.Length == 0)
                 {
@@ -140,7 +142,7 @@
                                     <th>Tên file gốc</th>
                                     <th>Định dạng</th>
                                     <th>Dung lượng</th>
-                                    <th>Ngày lưu</th>
+                                    <th>Cập nhật</th>
                                     <th></th>
                                 </tr>
                             </thead>
@@ -153,10 +155,11 @@
                                         <td class="mono">@Ui.Str(tf, "file_name")</td>
                                         <td><span class="pill">@Ui.Str(tf, "extension").ToUpperInvariant()</span></td>
                                         <td>@Ui.FileSize(Ui.Num(tf, "size_bytes"))</td>
-                                        <td>@Ui.Date(Ui.Str(tf, "created_at"))</td>
+                                        <td>@Ui.Date(Ui.Str(tf, "updated_at") != "" ? Ui.Str(tf, "updated_at") : Ui.Str(tf, "created_at"))</td>
                                         <td>
                                             <div class="table-actions">
-                                                <button class="btn btn-sm btn-outline" disabled="@busy" @onclick="() => PreviewTextFile(tfId)">Xem nội dung</button>
+                                                <button class="btn btn-sm btn-primary" disabled="@busy" @onclick="() => OpenInNotepad(tfId)">✎ Sửa Notepad</button>
+                                                <button class="btn btn-sm btn-outline" disabled="@busy" @onclick="() => PreviewTextFile(tfId)">Xem nhanh</button>
                                                 <a class="btn btn-sm btn-outline" href="/api/admin/texts/@Uri.EscapeDataString(tfId)/download" target="_blank" rel="noopener">↓ Tải về</a>
                                                 <button class="btn btn-sm btn-danger-outline" disabled="@busy" @onclick="() => DeleteTextFile(tf)">Xóa</button>
                                             </div>
@@ -183,6 +186,164 @@
                         <pre class="story-text-preview-box">@previewTextContent</pre>
                     </div>
                 }
+            </div>
+        }
+    }
+    else if(tab=="notepad")
+    {
+        <div class="panel rounded-2xl">
+            <div class="episode-list-toolbar">
+                <div>
+                    <h2>📝 Quản lý Bản thảo (.md, .txt) &amp; Notepad Online</h2>
+                    <p class="hint">Quản lý tập trung toàn bộ file chữ trên VPS (CRUD: Tạo mới, Upload nhiều file, Sửa trực tiếp nội dung bằng Notepad Online, Tải về, Xóa). Chỉ Admin có quyền truy cập.</p>
+                </div>
+                <div class="table-actions">
+                    <button class="btn btn-primary" disabled="@busy" @onclick="() => StartNewNotepadForStory(notepadFilterStoryId)">+ Soạn file mới trên Notepad</button>
+                    <button class="btn btn-outline" disabled="@busy" @onclick="LoadAllTextFiles">↻ Làm mới</button>
+                </div>
+            </div>
+
+            <div class="upload-grid top-margin">
+                <label>Bộ truyện nhận file upload
+                    <select @bind="notepadUploadStoryId">
+                        <option value="">-- Chọn bộ truyện --</option>
+                        @foreach (var s in storyRows)
+                        {
+                            <option value="@Ui.Str(s, "id")">@Ui.Str(s, "title")</option>
+                        }
+                    </select>
+                </label>
+                <label>Ghi chú / Tiêu đề (tùy chọn)
+                    <input @bind="notepadUploadTitle" maxlength="180" placeholder="Ví dụ: Bản thảo chương 1-20..." />
+                </label>
+                <label>Chọn 1 hoặc nhiều file (.md, .txt · tối đa 50MB/file)
+                    <input type="file" id="notepad-text-files" multiple accept=".md,.txt,text/markdown,text/plain" />
+                </label>
+                <button class="btn btn-outline" disabled="@busy" @onclick="UploadFromNotepadTab">@(uploadingTexts ? "⏳ Đang lưu lên VPS..." : "↑ Upload file lên VPS")</button>
+            </div>
+
+            <div class="divider"></div>
+            <div class="two-column" style="margin-bottom:0.75rem">
+                <label>Lọc theo bộ truyện
+                    <select @bind="notepadFilterStoryId">
+                        <option value="">Tất cả bộ truyện (@allTextFileRows.Length file)</option>
+                        @foreach (var s in storyRows)
+                        {
+                            var sid = Ui.Str(s, "id");
+                            <option value="@sid">@Ui.Str(s, "title") (@Ui.Num(s, "text_count") file)</option>
+                        }
+                    </select>
+                </label>
+                <label>Tìm kiếm theo tiêu đề hoặc tên file
+                    <input @bind="notepadSearch" @bind:event="oninput" placeholder="Nhập tên file, chương, bộ truyện..." />
+                </label>
+            </div>
+
+            @if (FilteredAllTextFiles.Length == 0)
+            {
+                <p class="hint">Không có file chữ (.md, .txt) nào khớp bộ lọc. Bạn có thể bấm "+ Soạn file mới trên Notepad" hoặc upload file từ máy tính.</p>
+            }
+            else
+            {
+                <div class="table-scroll overflow-x-auto">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>Bộ truyện</th>
+                                <th>Tiêu đề / Ghi chú</th>
+                                <th>Tên file</th>
+                                <th>Định dạng</th>
+                                <th>Dung lượng</th>
+                                <th>Cập nhật lúc</th>
+                                <th></th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            @foreach (var tf in FilteredAllTextFiles)
+                            {
+                                var tfId = Ui.Str(tf, "id");
+                                <tr @key="tfId" class="@(tfId == notepadFileId && notepadOpen ? "episode-just-uploaded" : "")">
+                                    <td><b>@Ui.Str(tf, "story_title")</b></td>
+                                    <td>@Ui.Str(tf, "title")</td>
+                                    <td class="mono">@Ui.Str(tf, "file_name")</td>
+                                    <td><span class="pill">@Ui.Str(tf, "extension").ToUpperInvariant()</span></td>
+                                    <td>@Ui.FileSize(Ui.Num(tf, "size_bytes"))</td>
+                                    <td>@Ui.Date(Ui.Str(tf, "updated_at") != "" ? Ui.Str(tf, "updated_at") : Ui.Str(tf, "created_at"))</td>
+                                    <td>
+                                        <div class="table-actions">
+                                            <button class="btn btn-sm btn-primary" disabled="@busy" @onclick="() => OpenInNotepad(tfId)">✎ Mở Notepad</button>
+                                            <a class="btn btn-sm btn-outline" href="/api/admin/texts/@Uri.EscapeDataString(tfId)/download" target="_blank" rel="noopener">↓ Tải về</a>
+                                            <button class="btn btn-sm btn-danger-outline" disabled="@busy" @onclick="() => AskDeleteNotepadFile(tf)">Xóa</button>
+                                        </div>
+                                    </td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+            }
+
+            @if (deleteNotepadFileId != "")
+            {
+                <div class="delete-confirm-panel top-margin">
+                    <strong>Xác nhận xóa vĩnh viễn file chữ trên VPS?</strong>
+                    <p>File "<b>@deleteNotepadFileName</b>" sẽ bị xóa khỏi bộ truyện và ổ đĩa VPS. Thao tác này không thể hoàn tác.</p>
+                    <button class="btn btn-danger" disabled="@busy" @onclick="ConfirmDeleteNotepadFile">Xác nhận xóa file</button>
+                    <button class="btn btn-outline" disabled="@busy" @onclick='() => { deleteNotepadFileId = ""; deleteNotepadFileName = ""; }'>Hủy</button>
+                </div>
+            }
+        </div>
+
+        @if (notepadOpen)
+        {
+            <div class="panel top-margin rounded-2xl notepad-editor-shell">
+                <div class="episode-list-toolbar">
+                    <div>
+                        <h2>@(notepadFileId == "" ? "✨ Tạo file chữ mới trên VPS (Notepad Online)" : $"✎ Đang chỉnh sửa: {notepadFileName}")</h2>
+                        <small>@(notepadFileId == "" ? "Nhập nội dung văn bản bên dưới và bấm Lưu để tạo file trực tiếp trên VPS" : $"Cập nhật lần cuối: {Ui.Date(notepadUpdatedAt)} · Dung lượng trên đĩa: {Ui.FileSize(notepadSizeBytes)}")</small>
+                    </div>
+                    <div class="table-actions">
+                        <button class="btn btn-primary" disabled="@(busy || savingNotepad)" @onclick="SaveNotepadFile">@(savingNotepad ? "⏳ Đang lưu lên VPS..." : "💾 Lưu thay đổi lên VPS")</button>
+                        <button class="btn btn-outline" disabled="@busy" @onclick="CopyNotepadText">📋 Sao chép toàn bộ</button>
+                        @if (notepadFileId != "")
+                        {
+                            <button class="btn btn-outline" disabled="@busy" @onclick="() => OpenInNotepad(notepadFileId)">↻ Tải lại bản gốc</button>
+                            <a class="btn btn-outline" href="/api/admin/texts/@Uri.EscapeDataString(notepadFileId)/download" target="_blank" rel="noopener">↓ Tải về máy</a>
+                        }
+                        <button class="btn btn-outline" disabled="@busy" @onclick="CloseNotepad">× Đóng Notepad</button>
+                    </div>
+                </div>
+
+                <div class="upload-grid top-margin">
+                    <label>Thuộc bộ truyện
+                        <select @bind="notepadStoryId">
+                            <option value="">-- Chọn bộ truyện --</option>
+                            @foreach (var s in storyRows)
+                            {
+                                <option value="@Ui.Str(s, "id")">@Ui.Str(s, "title")</option>
+                            }
+                        </select>
+                    </label>
+                    <label>Tiêu đề / Ghi chú
+                        <input @bind="notepadTitle" maxlength="180" placeholder="Ví dụ: Chương 1 - Mở đầu" />
+                    </label>
+                    <label>Tên file lưu trữ (.md hoặc .txt)
+                        <input @bind="notepadFileName" maxlength="200" placeholder="chuong-01.txt" />
+                    </label>
+                    <label>Định dạng
+                        <select @bind="notepadExtension">
+                            <option value=".txt">.TXT (Text thuần)</option>
+                            <option value=".md">.MD (Markdown)</option>
+                        </select>
+                    </label>
+                </div>
+
+                <div class="notepad-statusbar">
+                    <span id="admin-notepad-stats" class="mono">1 dòng · 0 từ · 0 ký tự</span>
+                    <span>Mã hóa: <b>UTF-8</b> · Lưu trữ: <b>VPS Private Storage (<code>story-texts/</code>)</b> · Phím <code>Tab</code> hỗ trợ thụt lề 2 khoảng trắng</span>
+                </div>
+
+                <textarea id="admin-notepad-editor" class="online-notepad-textarea" spellcheck="false" placeholder="Nhập hoặc dán nội dung văn bản (.md / .txt) tại đây..."></textarea>
             </div>
         }
     }
@@ -289,13 +450,21 @@
     private string tab="stories",message="",activeStoryId="",editingStoryId="",episodeTitle="",editEpisodeId="",editEpisodeTitle="",editEpisodeStatus="Published",deleteEpisodeId="",deleteEpisodeTitle="",editUserId="",editUsername="",editFullName="",editPhone="",editAddress="",editStatus="Active",grantReason="",activeOrderId="",activeOrderCode="",activeOrderStatus="",bankReference="",rejectReason="";
     private int episodeNumber=1,editEpisodeNumber=1,grantMonths=1,premiumPrice=100000,activeOrderAmount=0;
     private bool loading=true,busy=false,failed=false;
-    private bool uploadingAudio=false,refreshingEpisodes=false,uploadingTexts=false;
+    private bool uploadingAudio=false,refreshingEpisodes=false,uploadingTexts=false,notepadOpen=false,savingNotepad=false;
     private string uploadStatus="",lastUploadedEpisodeId="";
     private string textFileTitle="",previewTextId="",previewTextFileName="",previewTextContent="";
-    private int previewTextSize=0;
+    private string notepadFilterStoryId="",notepadSearch="",notepadUploadStoryId="",notepadUploadTitle="";
+    private string notepadFileId="",notepadStoryId="",notepadTitle="",notepadFileName="",notepadExtension=".txt",notepadUpdatedAt="",deleteNotepadFileId="",deleteNotepadFileName="";
+    private int previewTextSize=0,notepadSizeBytes=0;
     private bool previewTextTruncated=false;
     private JsonElement stats,storageInfo;
-    private JsonElement[] storyRows=[],episodeRows=[],textFileRows=[],userRows=[],orderRows=[],auditRows=[],genreRows=[],reviewRows=[];
+    private JsonElement[] storyRows=[],episodeRows=[],textFileRows=[],allTextFileRows=[],userRows=[],orderRows=[],auditRows=[],genreRows=[],reviewRows=[];
+    private JsonElement[] FilteredAllTextFiles => allTextFileRows.Where(tf =>
+        (string.IsNullOrWhiteSpace(notepadFilterStoryId) || Ui.Str(tf, "story_id") == notepadFilterStoryId) &&
+        (string.IsNullOrWhiteSpace(notepadSearch) ||
+         Ui.Str(tf, "title").Contains(notepadSearch.Trim(), StringComparison.OrdinalIgnoreCase) ||
+         Ui.Str(tf, "file_name").Contains(notepadSearch.Trim(), StringComparison.OrdinalIgnoreCase) ||
+         Ui.Str(tf, "story_title").Contains(notepadSearch.Trim(), StringComparison.OrdinalIgnoreCase))).ToArray();
     private string newGenreName="",editGenreSlug="",editGenreName="";
     private bool editGenreActive=true;
     private StoryForm story=new();
@@ -316,6 +485,7 @@
             stats=await Api.Get("/admin/stats");
             storageInfo=await Api.Get("/admin/storage");
             storyRows=Ui.Array(await Api.Get("/admin/stories"));
+            allTextFileRows=Ui.Array(await Api.Get("/admin/texts"));
             genreRows=Ui.Array(await Api.Get("/admin/genres"));
             reviewRows=Ui.Array(await Api.Get("/admin/reviews"));
             userRows=Ui.Array(await Api.Get("/admin/users"));
@@ -442,6 +612,7 @@
             var count = Ui.Num(res, "count");
             textFileTitle = "";
             await LoadEpisodes(false);
+            allTextFileRows = Ui.Array(await Api.Get("/admin/texts"));
             storyRows = Ui.Array(await Api.Get("/admin/stories"));
             Notify($"Đã lưu thành công {count} file chữ (.md/.txt) vào VPS cho bộ truyện.");
         }
@@ -489,7 +660,9 @@
         {
             await Api.Delete("/admin/texts/" + Uri.EscapeDataString(tfId));
             if (previewTextId == tfId) { previewTextId = ""; previewTextContent = ""; }
+            if (notepadFileId == tfId) CloseNotepad();
             await LoadEpisodes(false);
+            allTextFileRows = Ui.Array(await Api.Get("/admin/texts"));
             storyRows = Ui.Array(await Api.Get("/admin/stories"));
             Notify($"Đã xóa file chữ '{fname}' khỏi VPS.");
         }
@@ -500,6 +673,195 @@
         finally
         {
             busy=false;
+            await InvokeAsync(StateHasChanged);
+        }
+    }
+    private async Task SwitchToNotepadTab()
+    {
+        tab = "notepad";
+        if (notepadUploadStoryId == "" && activeStoryId != "") notepadUploadStoryId = activeStoryId;
+        await LoadAllTextFiles();
+    }
+    private async Task LoadAllTextFiles()
+    {
+        try
+        {
+            allTextFileRows = Ui.Array(await Api.Get("/admin/texts"));
+            storyRows = Ui.Array(await Api.Get("/admin/stories"));
+            await InvokeAsync(StateHasChanged);
+        }
+        catch (Exception e)
+        {
+            Notify("Không tải được danh sách bản thảo: " + e.Message, true);
+        }
+    }
+    private async Task UploadFromNotepadTab()
+    {
+        if (busy) return;
+        var targetStory = !string.IsNullOrWhiteSpace(notepadUploadStoryId) ? notepadUploadStoryId : notepadFilterStoryId;
+        if (string.IsNullOrWhiteSpace(targetStory))
+        {
+            Notify("Hãy chọn bộ truyện nhận file trước khi upload.", true);
+            return;
+        }
+        busy = true;
+        uploadingTexts = true;
+        await InvokeAsync(StateHasChanged);
+        try
+        {
+            var res = await Api.UploadStoryTexts(targetStory, notepadUploadTitle, "notepad-text-files");
+            var count = Ui.Num(res, "count");
+            notepadUploadTitle = "";
+            allTextFileRows = Ui.Array(await Api.Get("/admin/texts"));
+            storyRows = Ui.Array(await Api.Get("/admin/stories"));
+            if (activeStoryId == targetStory) await LoadEpisodes(false);
+            Notify($"Đã lưu thành công {count} file chữ (.md/.txt) lên VPS.");
+        }
+        catch (Exception e)
+        {
+            Notify("Upload file chữ thất bại: " + e.Message, true);
+        }
+        finally
+        {
+            busy = false;
+            uploadingTexts = false;
+            await InvokeAsync(StateHasChanged);
+        }
+    }
+    private async Task StartNewNotepadForStory(string preferredStoryId)
+    {
+        if (busy) return;
+        tab = "notepad";
+        notepadFileId = "";
+        notepadStoryId = !string.IsNullOrWhiteSpace(preferredStoryId)
+            ? preferredStoryId
+            : (!string.IsNullOrWhiteSpace(activeStoryId) ? activeStoryId : (storyRows.Length > 0 ? Ui.Str(storyRows[0], "id") : ""));
+        notepadTitle = "";
+        notepadExtension = ".txt";
+        notepadFileName = "ban-thao-" + DateTimeOffset.Now.ToString("yyyyMMdd-HHmm") + ".txt";
+        notepadSizeBytes = 0;
+        notepadUpdatedAt = "";
+        notepadOpen = true;
+        await InvokeAsync(StateHasChanged);
+        try { await Api.InitNewNotepadFile(""); } catch { }
+    }
+    private async Task OpenInNotepad(string textId)
+    {
+        if (string.IsNullOrWhiteSpace(textId) || busy) return;
+        busy = true;
+        tab = "notepad";
+        notepadOpen = true;
+        await InvokeAsync(StateHasChanged);
+        try
+        {
+            var meta = await Api.OpenNotepadFile(textId);
+            notepadFileId = Ui.Str(meta, "id");
+            notepadStoryId = Ui.Str(meta, "storyId");
+            notepadTitle = Ui.Str(meta, "title");
+            notepadFileName = Ui.Str(meta, "fileName");
+            notepadExtension = Ui.Str(meta, "extension");
+            if (notepadExtension is not (".md" or ".txt")) notepadExtension = ".txt";
+            notepadSizeBytes = Ui.Num(meta, "sizeBytes");
+            notepadUpdatedAt = Ui.Str(meta, "updatedAt");
+        }
+        catch (Exception e)
+        {
+            Notify("Không mở được file trên Notepad: " + e.Message, true);
+        }
+        finally
+        {
+            busy = false;
+            await InvokeAsync(StateHasChanged);
+        }
+    }
+    private async Task SaveNotepadFile()
+    {
+        if (busy || savingNotepad) return;
+        if (string.IsNullOrWhiteSpace(notepadStoryId))
+        {
+            Notify("Hãy chọn bộ truyện cho file chữ.", true);
+            return;
+        }
+        busy = true;
+        savingNotepad = true;
+        await InvokeAsync(StateHasChanged);
+        try
+        {
+            var isNew = string.IsNullOrWhiteSpace(notepadFileId);
+            var saved = await Api.SaveNotepadFile(notepadFileId, notepadStoryId, notepadTitle, notepadFileName, notepadExtension);
+            notepadFileId = Ui.Str(saved, "id");
+            notepadStoryId = Ui.Str(saved, "storyId") != "" ? Ui.Str(saved, "storyId") : Ui.Str(saved, "story_id");
+            notepadTitle = Ui.Str(saved, "title");
+            notepadFileName = Ui.Str(saved, "fileName") != "" ? Ui.Str(saved, "fileName") : Ui.Str(saved, "file_name");
+            notepadExtension = Ui.Str(saved, "extension");
+            notepadSizeBytes = Ui.Num(saved, "sizeBytes") > 0 ? Ui.Num(saved, "sizeBytes") : Ui.Num(saved, "size_bytes");
+            notepadUpdatedAt = Ui.Str(saved, "updatedAt") != "" ? Ui.Str(saved, "updatedAt") : Ui.Str(saved, "updated_at");
+
+            allTextFileRows = Ui.Array(await Api.Get("/admin/texts"));
+            storyRows = Ui.Array(await Api.Get("/admin/stories"));
+            if (activeStoryId != "") await LoadEpisodes(false);
+            Notify(isNew
+                ? $"Đã tạo mới và lưu file '{notepadFileName}' ({Ui.FileSize(notepadSizeBytes)}) lên VPS."
+                : $"Đã cập nhật nội dung file '{notepadFileName}' ({Ui.FileSize(notepadSizeBytes)}) trên VPS.");
+        }
+        catch (Exception e)
+        {
+            Notify("Lưu file Notepad thất bại: " + e.Message, true);
+        }
+        finally
+        {
+            busy = false;
+            savingNotepad = false;
+            await InvokeAsync(StateHasChanged);
+        }
+    }
+    private async Task CopyNotepadText()
+    {
+        try
+        {
+            await Api.CopyNotepadContent();
+            Notify("Đã sao chép toàn bộ nội dung văn bản vào bộ nhớ tạm (Clipboard).");
+        }
+        catch (Exception e)
+        {
+            Notify("Không sao chép được: " + e.Message, true);
+        }
+    }
+    private void CloseNotepad()
+    {
+        notepadOpen = false;
+        notepadFileId = "";
+    }
+    private void AskDeleteNotepadFile(JsonElement tf)
+    {
+        deleteNotepadFileId = Ui.Str(tf, "id");
+        deleteNotepadFileName = Ui.Str(tf, "file_name");
+    }
+    private async Task ConfirmDeleteNotepadFile()
+    {
+        if (string.IsNullOrWhiteSpace(deleteNotepadFileId) || busy) return;
+        var targetId = deleteNotepadFileId;
+        var targetName = deleteNotepadFileName;
+        busy = true;
+        try
+        {
+            await Api.Delete("/admin/texts/" + Uri.EscapeDataString(targetId));
+            deleteNotepadFileId = "";
+            deleteNotepadFileName = "";
+            if (notepadFileId == targetId) CloseNotepad();
+            if (previewTextId == targetId) { previewTextId = ""; previewTextContent = ""; }
+            allTextFileRows = Ui.Array(await Api.Get("/admin/texts"));
+            storyRows = Ui.Array(await Api.Get("/admin/stories"));
+            if (activeStoryId != "") await LoadEpisodes(false);
+            Notify($"Đã xóa vĩnh viễn file '{targetName}' khỏi VPS.");
+        }
+        catch (Exception e)
+        {
+            Notify("Không xóa được file chữ: " + e.Message, true);
+        }
+        finally
+        {
+            busy = false;
             await InvokeAsync(StateHasChanged);
         }
     }

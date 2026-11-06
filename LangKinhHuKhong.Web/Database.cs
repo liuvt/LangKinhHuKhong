@@ -55,6 +55,12 @@ public sealed class Database(IWebHostEnvironment environment)
         // V1.8: previous episodes remain intact and can be packaged via Admin -> Tạo HLS.
         var hasHls = Convert.ToInt32(await db.ValueAsync("SELECT COUNT(*) FROM pragma_table_info('episodes') WHERE name='hls_ref'")) > 0;
         if (!hasHls) await db.ExecAsync("ALTER TABLE episodes ADD COLUMN hls_ref TEXT NOT NULL DEFAULT ''");
+        var hasTextUpdated = Convert.ToInt32(await db.ValueAsync("SELECT COUNT(*) FROM pragma_table_info('story_text_files') WHERE name='updated_at'")) > 0;
+        if (!hasTextUpdated)
+        {
+            await db.ExecAsync("ALTER TABLE story_text_files ADD COLUMN updated_at TEXT NOT NULL DEFAULT ''");
+            await db.ExecAsync("UPDATE story_text_files SET updated_at = created_at WHERE updated_at = ''");
+        }
         // The persisted prefix never changes when a story slug/title is edited.
         await db.ExecAsync("UPDATE stories SET storage_prefix = 'stories/' || slug || '--' || id WHERE storage_prefix = ''");
         // V1.9: seed the catalog; preserve legacy single-genre story assignments.

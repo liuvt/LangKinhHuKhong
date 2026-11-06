@@ -197,6 +197,7 @@ CREATE TABLE IF NOT EXISTS story_text_files (
  stored_name TEXT NOT NULL,
  extension TEXT NOT NULL CHECK(extension IN ('.md','.txt')),
  size_bytes INTEGER NOT NULL DEFAULT 0,
- created_at TEXT NOT NULL
+ created_at TEXT NOT NULL,
+ updated_at TEXT NOT NULL DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS ix_story_text_files_story ON story_text_files(story_id, created_at DESC);

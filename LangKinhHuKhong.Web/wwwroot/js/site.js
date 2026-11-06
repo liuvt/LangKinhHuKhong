@@ -64,8 +64,8 @@ window.lkh = (() => {
     document.getElementById('cover-file').value = '';
     return result;
   }
-  async function uploadStoryTexts(storyId, title = '') {
-    const input = document.getElementById('story-text-files');
+  async function uploadStoryTexts(storyId, title = '', inputId = 'story-text-files') {
+    const input = document.getElementById(inputId) || document.getElementById('story-text-files');
     const files = Array.from(input?.files || []);
     if (files.length === 0) throw new Error('Hãy chọn ít nhất 1 file .md hoặc .txt trước khi upload.');
     if (files.length > 100) throw new Error('Mỗi lần chỉ chọn tối đa 100 file chữ.');
@@ -81,6 +81,92 @@ window.lkh = (() => {
     const result = await send(`/admin/stories/${encodeURIComponent(storyId)}/texts`, 'POST', form);
     if (input) input.value = '';
     return result;
+  }
+  function updateNotepadStats(textarea) {
+    const statsEl = document.getElementById('admin-notepad-stats');
+    if (!statsEl || !textarea) return;
+    const text = textarea.value || '';
+    const chars = text.length;
+    const lines = text === '' ? 1 : text.split('\n').length;
+    const words = text.trim() === '' ? 0 : text.trim().split(/\s+/).length;
+    statsEl.textContent = `${lines.toLocaleString('vi-VN')} dòng · ${words.toLocaleString('vi-VN')} từ · ${chars.toLocaleString('vi-VN')} ký tự`;
+  }
+  function bindNotepadEditor() {
+    const editor = document.getElementById('admin-notepad-editor');
+    if (!editor) return null;
+    if (editor.dataset.bound !== '1') {
+      editor.dataset.bound = '1';
+      editor.addEventListener('input', () => updateNotepadStats(editor));
+      editor.addEventListener('keydown', e => {
+        if (e.key === 'Tab') {
+          e.preventDefault();
+          const start = editor.selectionStart;
+          const end = editor.selectionEnd;
+          editor.value = editor.value.substring(0, start) + '  ' + editor.value.substring(end);
+          editor.selectionStart = editor.selectionEnd = start + 2;
+          updateNotepadStats(editor);
+        }
+      });
+    }
+    updateNotepadStats(editor);
+    return editor;
+  }
+  async function waitForNotepadEditor() {
+    for (let i = 0; i < 20; i++) {
+      const el = bindNotepadEditor();
+      if (el) return el;
+      await new Promise(r => setTimeout(r, 25));
+    }
+    return bindNotepadEditor();
+  }
+  async function openNotepadFile(textId) {
+    const data = await send(`/admin/texts/${encodeURIComponent(textId)}/content`, 'GET');
+    const editor = await waitForNotepadEditor();
+    if (editor) {
+      editor.value = data.content || '';
+      updateNotepadStats(editor);
+    }
+    return {
+      id: data.id || '',
+      storyId: data.storyId || '',
+      storyTitle: data.storyTitle || '',
+      title: data.title || '',
+      fileName: data.fileName || '',
+      extension: data.extension || '.txt',
+      sizeBytes: data.sizeBytes || 0,
+      createdAt: data.createdAt || '',
+      updatedAt: data.updatedAt || '',
+      truncated: Boolean(data.truncated)
+    };
+  }
+  async function initNewNotepadFile(initialContent = '') {
+    const editor = await waitForNotepadEditor();
+    if (editor) {
+      editor.value = initialContent || '';
+      updateNotepadStats(editor);
+      editor.focus();
+    }
+    return { ok: true };
+  }
+  async function saveNotepadFile(textId, storyId, title, fileName, extension) {
+    const editor = bindNotepadEditor();
+    const content = editor ? editor.value : '';
+    if (!storyId) throw new Error('Hãy chọn bộ truyện.');
+    if (textId) {
+      return await send(`/admin/texts/${encodeURIComponent(textId)}`, 'PUT', {
+        storyId, title, fileName, extension, content
+      });
+    } else {
+      return await send(`/admin/stories/${encodeURIComponent(storyId)}/texts/create`, 'POST', {
+        title, fileName, extension, content
+      });
+    }
+  }
+  async function copyNotepadContent() {
+    const editor = document.getElementById('admin-notepad-editor');
+    if (!editor) return { ok: false };
+    await navigator.clipboard.writeText(editor.value || '');
+    return { ok: true };
   }
   // Free -> direct 5-minute MP3 preview. Premium/Admin -> encrypted HLS only.
   // A browser cannot call the full MP3 route; the HLS playlist/segments/key are gated by server.
@@ -303,6 +389,10 @@ window.lkh = (() => {
   document.addEventListener('visibilitychange', () => {
     if (document.visibilityState === 'visible') silentReconnect();
   });
-  return { api: send, uploadEpisode, uploadCover, uploadStoryTexts, replaceEpisodeAudio, listen, stopAudio, bindAutoNext };
+  return {
+    api: send, uploadEpisode, uploadCover, uploadStoryTexts,
+    openNotepadFile, initNewNotepadFile, saveNotepadFile, copyNotepadContent,
+    replaceEpisodeAudio, listen, stopAudio, bindAutoNext
+  };
 })();
 window.lkh.reload = () => window.location.reload();

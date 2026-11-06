@@ -234,3 +234,7 @@
 #components-reconnect-modal,#components-reconnect-modal *{display:none!important;visibility:hidden!important;opacity:0!important;pointer-events:none!important}
 .text-preview-panel{margin-top:1rem}
 .story-text-preview-box{margin:.75rem 0 0;padding:1rem;max-height:460px;overflow:auto;white-space:pre-wrap;word-break:break-word;background:rgba(15,23,42,.04);border:1px solid var(--border,#e2e8f0);border-radius:12px;font-family:ui-monospace,SFMono-Regular,Consolas,monospace;font-size:.9rem;line-height:1.6;color:var(--text,#0f172a)}
+.notepad-editor-shell{border:1px solid rgba(37,99,235,.28);box-shadow:0 12px 32px rgba(15,23,42,.06)}
+.notepad-statusbar{display:flex;flex-wrap:wrap;justify-content:space-between;align-items:center;gap:.75rem;margin-top:.85rem;padding:.55rem .9rem;background:rgba(15,23,42,.05);border:1px solid var(--border,#e2e8f0);border-bottom:none;border-radius:12px 12px 0 0;font-size:.82rem;color:var(--muted,#475569)}
+.online-notepad-textarea{width:100%;min-height:540px;padding:1.1rem 1.25rem;border:1px solid var(--border,#cbd5e1);border-radius:0 0 12px 12px;background:#ffffff;color:#0f172a;font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,"Liberation Mono",monospace;font-size:.95rem;line-height:1.7;resize:vertical;outline:none;tab-size:2}
+.online-notepad-textarea:focus{border-color:#2563eb;box-shadow:0 0 0 3px rgba(37,99,235,.12)}
