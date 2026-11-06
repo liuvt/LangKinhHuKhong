@@ -101,8 +101,11 @@ public sealed class GoogleDriveService
         if (!File.Exists(ConfigPath)) return new StoredConfig();
         try
         {
-            var json = File.ReadAllText(ConfigPath);
-            return JsonSerializer.Deserialize<StoredConfig>(json) ?? new StoredConfig();
+            var json = File.ReadAllText(ConfigPath, Encoding.UTF8).TrimStart('\uFEFF', '\u200B');
+            return JsonSerializer.Deserialize<StoredConfig>(json, new JsonSerializerOptions
+            {
+                PropertyNameCaseInsensitive = true
+            }) ?? new StoredConfig();
         }
         catch
         {
@@ -160,8 +163,20 @@ public sealed class GoogleDriveService
         try
         {
             var cfg = LoadConfigInternal();
-            if (!string.IsNullOrWhiteSpace(clientId)) cfg.ClientId = clientId.Trim();
-            if (!string.IsNullOrWhiteSpace(clientSecret)) cfg.ClientSecret = clientSecret.Trim();
+            if (!string.IsNullOrWhiteSpace(clientId))
+            {
+                var trimmedId = clientId.Trim();
+                if (!trimmedId.EndsWith(".apps.googleusercontent.com", StringComparison.OrdinalIgnoreCase))
+                    throw new InvalidOperationException("Client ID phải có dạng '...apps.googleusercontent.com'.");
+                cfg.ClientId = trimmedId;
+            }
+            if (!string.IsNullOrWhiteSpace(clientSecret))
+            {
+                var trimmedSecret = clientSecret.Trim();
+                if (trimmedSecret.Length < 12)
+                    throw new InvalidOperationException("Client Secret không hợp lệ.");
+                cfg.ClientSecret = trimmedSecret;
+            }
             if (rootFolderId is not null)
             {
                 var cleaned = ExtractFolderId(rootFolderId);

@@ -287,10 +287,10 @@
                     <p class="hint">Authorized redirect URI cần khai báo trong Google Cloud Console: <code>@($"{Navigation.BaseUri.TrimEnd('/')}/api/admin/gdrive/callback")</code></p>
                     <div class="upload-grid">
                         <label>Client ID
-                            <input @bind="gdriveClientIdInput" placeholder="...apps.googleusercontent.com" />
+                            <input @bind="gdriveClientIdInput" autocomplete="off" placeholder="...apps.googleusercontent.com" />
                         </label>
                         <label>Client Secret
-                            <input type="password" @bind="gdriveClientSecretInput" placeholder="GOCSPX-..." />
+                            <input type="password" @bind="gdriveClientSecretInput" autocomplete="new-password" placeholder="GOCSPX-..." />
                         </label>
                         <label>Tên thư mục gốc trên Google Drive
                             <input @bind="gdriveRootFolderInput" placeholder="LangKinhHuKhong-BanThao" />
