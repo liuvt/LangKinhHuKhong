@@ -139,6 +139,7 @@ public sealed class GoogleDriveService
         return new
         {
             configured = hasClient,
+            hasClientConfig = hasClient,
             connected,
             clientId = cfg.ClientId,
             clientIdPreview = preview,

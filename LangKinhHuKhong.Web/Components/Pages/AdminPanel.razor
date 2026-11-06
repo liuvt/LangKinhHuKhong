@@ -114,8 +114,32 @@
                 }
 
                 <div class="divider"></div>
-                <h3 class="step-title"><span>4</span> Kho lưu trữ file chữ (.md, .txt) — Tách 2 luồng: VPS hoặc Google Drive</h3>
-                <p class="hint">Mỗi bộ truyện có thể lưu trữ nhiều file bản thảo chữ (<code>.md</code>, <code>.txt</code>). Bạn có thể chọn <b>Upload lên VPS</b> (lưu tại ổ đĩa máy chủ <code>story-texts/</code>) hoặc <b>Upload lên Google Drive</b> (lưu vào thư mục của truyện trên Google Drive).</p>
+                <div class="episode-list-toolbar">
+                    <div>
+                        <h3 class="step-title" style="margin:0"><span>4</span> Kho lưu trữ file chữ (.md, .txt) — Tách 2 luồng: VPS hoặc Google Drive</h3>
+                        <p class="hint" style="margin-top:0.25rem">
+                            Mỗi bộ truyện có thể lưu trữ nhiều file bản thảo chữ (<code>.md</code>, <code>.txt</code>). Bạn có thể chọn <b>Upload lên VPS</b> hoặc <b>Upload lên Google Drive</b>.
+                            @if (Ui.Bool(gdriveStatus, "connected"))
+                            {
+                                <span class="storage-pill storage-r2" style="margin-left:0.35rem">● Đã kết nối Google Drive (@(Ui.Str(gdriveStatus, "email") != "" ? Ui.Str(gdriveStatus, "email") : Ui.Str(gdriveStatus, "displayName")))</span>
+                            }
+                            else
+                            {
+                                <span class="storage-pill storage-local" style="margin-left:0.35rem">○ Chưa kết nối Google Drive</span>
+                            }
+                        </p>
+                    </div>
+                    <div class="table-actions">
+                        @if (!Ui.Bool(gdriveStatus, "connected"))
+                        {
+                            <a class="btn btn-primary" href="/api/admin/gdrive/connect" data-enhance-nav="false">🔗 Kết nối tài khoản Google Drive</a>
+                        }
+                        else if (Ui.Str(gdriveStatus, "rootFolderUrl") != "")
+                        {
+                            <a class="btn btn-sm btn-outline" href="@Ui.Str(gdriveStatus, "rootFolderUrl")" target="_blank" rel="noopener">↗ Mở Google Drive</a>
+                        }
+                    </div>
+                </div>
                 <div class="upload-grid">
                     <label>Ghi chú / Tiêu đề (tùy chọn)
                         <input @bind="textFileTitle" maxlength="180" placeholder="Ví dụ: Bản thảo quyển 1, Toàn văn..." />
@@ -223,11 +247,11 @@
                             · Hệ thống hoạt động theo <b>2 luồng độc lập</b>: khi Upload hoặc Soạn file mới, bạn tùy chọn lưu vào <b>💾 VPS</b> hoặc lưu lên <b>☁ Google Drive</b>.
                         </p>
                     }
-                    else if (Ui.Bool(gdriveStatus, "hasClientConfig"))
+                    else if (Ui.Bool(gdriveStatus, "configured") || Ui.Bool(gdriveStatus, "hasClientConfig"))
                     {
                         <p class="hint">
                             <span class="storage-pill storage-local">○ Đã nạp OAuth Client (@Ui.Str(gdriveStatus, "clientIdPreview"))</span>
-                            Bấm <b>"🔗 Kết nối tài khoản Google Drive"</b> bên phải để kích hoạt luồng upload &amp; quản lý file trên Google Drive (thư mục <code>@(Ui.Str(gdriveStatus, "rootFolderName") != "" ? Ui.Str(gdriveStatus, "rootFolderName") : "LangKinhHuKhong-BanThao")</code>).
+                            Bấm nút <b>"🔗 Kết nối tài khoản Google Drive"</b> màu xanh bên phải để cấp quyền lưu file vào thư mục <code>@(Ui.Str(gdriveStatus, "rootFolderName") != "" ? Ui.Str(gdriveStatus, "rootFolderName") : "LangKinhHuKhong-BanThao")</code> trên Google Drive của bạn.
                         </p>
                     }
                     else
@@ -245,15 +269,12 @@
                         {
                             <a class="btn btn-outline" href="@Ui.Str(gdriveStatus, "rootFolderUrl")" target="_blank" rel="noopener">↗ Mở Google Drive</a>
                         }
-                        <a class="btn btn-outline" href="/api/admin/gdrive/connect">↻ Đổi tài khoản</a>
+                        <a class="btn btn-outline" href="/api/admin/gdrive/connect" data-enhance-nav="false">↻ Đổi tài khoản</a>
                         <button class="btn btn-danger-outline" disabled="@busy" @onclick="DisconnectGoogleDrive">Ngắt kết nối</button>
                     }
                     else
                     {
-                        @if (Ui.Bool(gdriveStatus, "hasClientConfig"))
-                        {
-                            <a class="btn btn-primary" href="/api/admin/gdrive/connect">🔗 Kết nối tài khoản Google Drive</a>
-                        }
+                        <a class="btn btn-primary" href="/api/admin/gdrive/connect" data-enhance-nav="false">🔗 Kết nối tài khoản Google Drive</a>
                         <button class="btn btn-outline" @onclick="() => showGdriveConfig = !showGdriveConfig">⚙ Cấu hình OAuth Client</button>
                     }
                 </div>
