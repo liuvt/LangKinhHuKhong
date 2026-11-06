@@ -673,6 +673,22 @@ public sealed class GoogleDriveService
         return (driveFileId, name, desc, bytes.Length > 0 ? bytes.Length : size, mod, link, content);
     }
 
+    public async Task<byte[]> DownloadDriveFileBytesAsync(string driveFileId, CancellationToken ct)
+    {
+        var token = await GetAccessTokenAsync(ct);
+        var client = httpFactory.CreateClient();
+        using var req = new HttpRequestMessage(HttpMethod.Get,
+            $"https://www.googleapis.com/drive/v3/files/{Uri.EscapeDataString(driveFileId)}?alt=media");
+        req.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
+        using var res = await client.SendAsync(req, ct);
+        if (!res.IsSuccessStatusCode)
+        {
+            var err = await res.Content.ReadAsStringAsync(ct);
+            throw new InvalidOperationException("Không tải được file từ Google Drive: " + err);
+        }
+        return await res.Content.ReadAsByteArrayAsync(ct);
+    }
+
     public async Task<(string Id, string Name, int SizeBytes)> SaveDriveFileDirectAsync(
         string? driveFileId, string? parentFolderId, string fileName, string description, string content, CancellationToken ct)
     {
@@ -694,14 +710,16 @@ public sealed class GoogleDriveService
         var bytes = utf8NoBom.GetBytes(content ?? "");
         var savedId = await UpsertTextFileOnDriveAsync(targetParent, driveFileId ?? "", cleanName, description ?? "", bytes, ext, ct);
 
-        // If this Drive file is linked to a row in story_text_files, also keep VPS copy in sync!
         await using var db = await database.OpenAsync();
-        var linked = await db.FirstAsync("SELECT id,story_id,stored_name FROM story_text_files WHERE drive_file_id=@did", ("@did", savedId));
+        var linked = await db.FirstAsync("SELECT id,story_id,stored_name,storage_target FROM story_text_files WHERE drive_file_id=@did", ("@did", savedId));
         if (linked is not null)
         {
-            var localPath = Path.Combine(database.TextRoot, linked.S("story_id"), linked.S("stored_name"));
-            Directory.CreateDirectory(Path.GetDirectoryName(localPath)!);
-            await File.WriteAllBytesAsync(localPath, bytes, ct);
+            if (!string.IsNullOrWhiteSpace(linked.S("stored_name")) && linked.S("storage_target") != "drive")
+            {
+                var localPath = Path.Combine(database.TextRoot, linked.S("story_id"), linked.S("stored_name"));
+                Directory.CreateDirectory(Path.GetDirectoryName(localPath)!);
+                await File.WriteAllBytesAsync(localPath, bytes, ct);
+            }
             await db.ExecAsync(@"UPDATE story_text_files
                 SET title=@title, file_name=@fname, size_bytes=@size, updated_at=@now
                 WHERE id=@id",
@@ -728,7 +746,9 @@ public sealed class GoogleDriveService
             var files = await db.ListAsync("SELECT * FROM story_text_files WHERE story_id=@sid ORDER BY created_at ASC", ("@sid", sid));
             foreach (var tf in files)
             {
-                var localPath = Path.Combine(database.TextRoot, sid, tf.S("stored_name"));
+                var sname = tf.S("stored_name");
+                if (string.IsNullOrWhiteSpace(sname)) continue;
+                var localPath = Path.Combine(database.TextRoot, sid, sname);
                 if (!File.Exists(localPath)) continue;
                 var bytes = await File.ReadAllBytesAsync(localPath, ct);
                 var driveId = await UpsertTextFileOnDriveAsync(

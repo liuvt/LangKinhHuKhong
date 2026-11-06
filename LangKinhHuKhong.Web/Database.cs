@@ -63,6 +63,12 @@ public sealed class Database(IWebHostEnvironment environment)
         }
         var hasTextDriveId = Convert.ToInt32(await db.ValueAsync("SELECT COUNT(*) FROM pragma_table_info('story_text_files') WHERE name='drive_file_id'")) > 0;
         if (!hasTextDriveId) await db.ExecAsync("ALTER TABLE story_text_files ADD COLUMN drive_file_id TEXT NOT NULL DEFAULT ''");
+        var hasTextStorageTarget = Convert.ToInt32(await db.ValueAsync("SELECT COUNT(*) FROM pragma_table_info('story_text_files') WHERE name='storage_target'")) > 0;
+        if (!hasTextStorageTarget)
+        {
+            await db.ExecAsync("ALTER TABLE story_text_files ADD COLUMN storage_target TEXT NOT NULL DEFAULT 'vps'");
+            await db.ExecAsync("UPDATE story_text_files SET storage_target = CASE WHEN stored_name='' AND drive_file_id<>'' THEN 'drive' ELSE 'vps' END");
+        }
         var hasStoryDriveFolder = Convert.ToInt32(await db.ValueAsync("SELECT COUNT(*) FROM pragma_table_info('stories') WHERE name='drive_folder_id'")) > 0;
         if (!hasStoryDriveFolder) await db.ExecAsync("ALTER TABLE stories ADD COLUMN drive_folder_id TEXT NOT NULL DEFAULT ''");
         // The persisted prefix never changes when a story slug/title is edited.

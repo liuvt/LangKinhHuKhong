@@ -64,13 +64,14 @@ window.lkh = (() => {
     document.getElementById('cover-file').value = '';
     return result;
   }
-  async function uploadStoryTexts(storyId, title = '', inputId = 'story-text-files') {
+  async function uploadStoryTexts(storyId, title = '', inputId = 'story-text-files', storageTarget = 'vps') {
     const input = document.getElementById(inputId) || document.getElementById('story-text-files');
     const files = Array.from(input?.files || []);
     if (files.length === 0) throw new Error('Hãy chọn ít nhất 1 file .md hoặc .txt trước khi upload.');
     if (files.length > 100) throw new Error('Mỗi lần chỉ chọn tối đa 100 file chữ.');
     const form = new FormData();
     form.append('title', title || '');
+    form.append('storageTarget', storageTarget || 'vps');
     for (const file of files) {
       if (!/\.(md|txt)$/i.test(file.name))
         throw new Error(`File "${file.name}" không hợp lệ. Chỉ nhận định dạng .md hoặc .txt.`);
@@ -134,6 +135,8 @@ window.lkh = (() => {
       fileName: data.fileName || '',
       extension: data.extension || '.txt',
       sizeBytes: data.sizeBytes || 0,
+      driveFileId: data.driveFileId || '',
+      storageTarget: data.storageTarget || 'vps',
       createdAt: data.createdAt || '',
       updatedAt: data.updatedAt || '',
       truncated: Boolean(data.truncated)
@@ -148,17 +151,17 @@ window.lkh = (() => {
     }
     return { ok: true };
   }
-  async function saveNotepadFile(textId, storyId, title, fileName, extension) {
+  async function saveNotepadFile(textId, storyId, title, fileName, extension, storageTarget = 'vps') {
     const editor = bindNotepadEditor();
     const content = editor ? editor.value : '';
     if (!storyId) throw new Error('Hãy chọn bộ truyện.');
     if (textId) {
       return await send(`/admin/texts/${encodeURIComponent(textId)}`, 'PUT', {
-        storyId, title, fileName, extension, content
+        storyId, title, fileName, extension, content, storageTarget: storageTarget || 'vps'
       });
     } else {
       return await send(`/admin/stories/${encodeURIComponent(storyId)}/texts/create`, 'POST', {
-        title, fileName, extension, content
+        title, fileName, extension, content, storageTarget: storageTarget || 'vps'
       });
     }
   }

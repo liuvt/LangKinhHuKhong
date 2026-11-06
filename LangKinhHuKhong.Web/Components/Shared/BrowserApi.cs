@@ -9,7 +9,7 @@ namespace LangKinhHuKhong.Components.Shared;
 public sealed class BrowserApi(IJSRuntime js) : IAsyncDisposable
 {
     private Task<IJSObjectReference>? moduleTask;
-    private const string ModulePath = "/js/lkh-interop.js?v=1.9.5.1";
+    private const string ModulePath = "/js/lkh-interop.js?v=1.9.5.2";
 
     private async Task<IJSObjectReference> ModuleAsync()
     {
@@ -45,11 +45,11 @@ public sealed class BrowserApi(IJSRuntime js) : IAsyncDisposable
     public ValueTask<JsonElement> ReplaceAudio(string episodeId) => CallJsonWithTimeout("replaceEpisodeAudio", LongUploadTimeout, episodeId);
     public ValueTask<JsonElement> Upload(string storyId, string title, int number) => CallJsonWithTimeout("uploadEpisode", LongUploadTimeout, storyId, title, number);
     public ValueTask<JsonElement> UploadCover(string storyId) => CallJsonWithTimeout("uploadCover", LongUploadTimeout, storyId);
-    public ValueTask<JsonElement> UploadStoryTexts(string storyId, string title, string inputId = "story-text-files") => CallJsonWithTimeout("uploadStoryTexts", LongUploadTimeout, storyId, title, inputId);
+    public ValueTask<JsonElement> UploadStoryTexts(string storyId, string title, string inputId = "story-text-files", string storageTarget = "vps") => CallJsonWithTimeout("uploadStoryTexts", LongUploadTimeout, storyId, title, inputId, storageTarget);
     public ValueTask<JsonElement> OpenNotepadFile(string textId) => CallJsonWithTimeout("openNotepadFile", LongUploadTimeout, textId);
     public ValueTask<JsonElement> InitNewNotepadFile(string initialContent = "") => CallJson("initNewNotepadFile", initialContent);
-    public ValueTask<JsonElement> SaveNotepadFile(string textId, string storyId, string title, string fileName, string extension)
-        => CallJsonWithTimeout("saveNotepadFile", LongUploadTimeout, textId, storyId, title, fileName, extension);
+    public ValueTask<JsonElement> SaveNotepadFile(string textId, string storyId, string title, string fileName, string extension, string storageTarget = "vps")
+        => CallJsonWithTimeout("saveNotepadFile", LongUploadTimeout, textId, storyId, title, fileName, extension, storageTarget);
     public ValueTask<JsonElement> CopyNotepadContent() => CallJson("copyNotepadContent");
     public ValueTask<JsonElement> OpenDriveNotepadFile(string driveFileId) => CallJsonWithTimeout("openDriveNotepadFile", LongUploadTimeout, driveFileId);
     public ValueTask<JsonElement> SaveDriveNotepadFile(string driveFileId, string parentFolderId, string fileName, string title)

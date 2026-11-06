@@ -189,7 +189,7 @@ CREATE TABLE IF NOT EXISTS playback_sessions (
  last_tick INTEGER NOT NULL
 );
 
--- Story text manuscripts (.md, .txt) stored on VPS per story (0..N files per story).
+-- Story text manuscripts (.md, .txt) stored on VPS or Google Drive per story (0..N files per story).
 CREATE TABLE IF NOT EXISTS story_text_files (
  id TEXT PRIMARY KEY,
  story_id TEXT NOT NULL REFERENCES stories(id) ON DELETE CASCADE,
@@ -199,6 +199,7 @@ CREATE TABLE IF NOT EXISTS story_text_files (
  extension TEXT NOT NULL CHECK(extension IN ('.md','.txt')),
  size_bytes INTEGER NOT NULL DEFAULT 0,
  drive_file_id TEXT NOT NULL DEFAULT '',
+ storage_target TEXT NOT NULL DEFAULT 'vps',
  created_at TEXT NOT NULL,
  updated_at TEXT NOT NULL DEFAULT ''
 );
