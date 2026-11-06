@@ -2,7 +2,7 @@
 // Blazor imports this ES module before invoking any audio/auth/upload method.
 // Static import makes the dependency load+execute deterministically.
 // site.js is intentionally a side-effect module, retained unchanged.
-import './site.js?v=1.9.4.8';
+import './site.js?v=1.9.4.9';
 
 function core(method) {
     const instance = window.lkh;
@@ -15,6 +15,7 @@ export const api = (...args) => core('api').api(...args);
 export const uploadEpisode = (...args) => core('uploadEpisode').uploadEpisode(...args);
 export const replaceEpisodeAudio = (...args) => core('replaceEpisodeAudio').replaceEpisodeAudio(...args);
 export const uploadCover = (...args) => core('uploadCover').uploadCover(...args);
+export const uploadStoryTexts = (...args) => core('uploadStoryTexts').uploadStoryTexts(...args);
 export const listen = (...args) => core('listen').listen(...args);
 export const stopAudio = (...args) => core('stopAudio').stopAudio(...args);
 export const bindAutoNext = (...args) => core('bindAutoNext').bindAutoNext(...args);

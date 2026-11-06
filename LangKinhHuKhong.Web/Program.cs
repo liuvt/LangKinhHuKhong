@@ -132,7 +132,8 @@ app.Use(async (ctx, next) =>
         var isAdminUpload = path.StartsWith("/api/admin/", StringComparison.OrdinalIgnoreCase) &&
             (path.EndsWith("/episodes", StringComparison.OrdinalIgnoreCase) ||
              path.EndsWith("/cover", StringComparison.OrdinalIgnoreCase) ||
-             path.EndsWith("/audio", StringComparison.OrdinalIgnoreCase));
+             path.EndsWith("/audio", StringComparison.OrdinalIgnoreCase) ||
+             path.EndsWith("/texts", StringComparison.OrdinalIgnoreCase));
         if (!isAdminUpload && ctx.Request.ContentLength is > 256 * 1024)
         {
             ctx.Response.StatusCode = StatusCodes.Status413PayloadTooLarge;
@@ -594,6 +595,8 @@ admin.MapGet("/stories", async Task<IResult> (Database source) =>
        CASE WHEN cover_file<>'' THEN '/api/stories/' || id || '/cover' ELSE cover_url END AS cover_image_url
        ,COALESCE((SELECT group_concat(g.slug,'|') FROM story_genres sg JOIN genres g ON g.slug=sg.genre_slug
            WHERE sg.story_id=stories.id),'') AS genre_keys
+       ,(SELECT COUNT(*) FROM episodes ep WHERE ep.story_id=stories.id) AS episode_count
+       ,(SELECT COUNT(*) FROM story_text_files tf WHERE tf.story_id=stories.id) AS text_count
        FROM stories ORDER BY updated_at DESC LIMIT 300"));
 });
 // Admin: genre catalog. Disabling keeps existing story/category relations intact.
@@ -816,6 +819,174 @@ admin.MapGet("/stories/{id}/episodes", async Task<IResult> (string id, Database 
         CASE WHEN full_file LIKE 'r2:stories/%/Episodes/%' THEN 'Grouped' ELSE 'Legacy' END AS organization,
         CASE WHEN full_file LIKE 'r2:%' THEN SUBSTR(full_file,4) ELSE full_file END AS audio_path
         FROM episodes WHERE story_id=@id ORDER BY episode_number",("@id",id)));
+});
+
+// Story text files (.md, .txt) stored directly on VPS disk (DataRoot/story-texts/<storyId>/).
+// Each story can have 0, 1, or many text files.
+admin.MapGet("/stories/{id}/texts", async Task<IResult> (string id, Database source) =>
+{
+    if (!Regex.IsMatch(id, "^[a-f0-9]{32}$")) return Results.NotFound();
+    await using var db = await source.OpenAsync();
+    return Results.Ok(await db.ListAsync(@"SELECT id,story_id,title,file_name,extension,size_bytes,created_at
+        FROM story_text_files WHERE story_id=@id ORDER BY created_at DESC, file_name ASC", ("@id", id)));
+});
+
+admin.MapPost("/stories/{id}/texts", async Task<IResult> (string id, HttpRequest request, HttpContext ctx, Database source) =>
+{
+    if (!Regex.IsMatch(id, "^[a-f0-9]{32}$")) return Results.NotFound();
+    if (!request.HasFormContentType) return Bad("Yêu cầu multipart/form-data.");
+    var form = await request.ReadFormAsync(ctx.RequestAborted);
+    var noteTitle = form["title"].ToString().Trim();
+    if (noteTitle.Length > 180) return Bad("Ghi chú / tiêu đề tối đa 180 ký tự.");
+    if (form.Files.Count == 0) return Bad("Hãy chọn ít nhất 1 file .md hoặc .txt.");
+    if (form.Files.Count > 100) return Bad("Mỗi lần upload tối đa 100 file chữ.");
+
+    await using var db = await source.OpenAsync();
+    var storyExists = await db.ValueAsync("SELECT 1 FROM stories WHERE id=@id", ("@id", id));
+    if (storyExists is null) return Results.NotFound();
+
+    const long maxBytesPerFile = 50L * 1024 * 1024; // 50 MB per .md/.txt file
+    foreach (var f in form.Files)
+    {
+        var ext = Path.GetExtension(f.FileName).ToLowerInvariant();
+        if (ext is not (".md" or ".txt"))
+            return Bad($"File '{f.FileName}' không hợp lệ. Chỉ chấp nhận định dạng .md hoặc .txt.");
+        if (f.Length <= 0 || f.Length > maxBytesPerFile)
+            return Bad($"File '{f.FileName}' phải lớn hơn 0 byte và tối đa 50MB.");
+    }
+
+    var storyDir = Path.Combine(source.TextRoot, id);
+    Directory.CreateDirectory(storyDir);
+    var createdItems = new List<object>();
+    var writtenFiles = new List<string>();
+    try
+    {
+        foreach (var f in form.Files)
+        {
+            var ext = Path.GetExtension(f.FileName).ToLowerInvariant();
+            var rawName = Path.GetFileName(f.FileName).Trim();
+            if (rawName.Length > 200) rawName = rawName[^200..];
+            var textId = Helpers.Id();
+            var storedName = textId + ext;
+            var destPath = Path.Combine(storyDir, storedName);
+
+            await using (var output = new FileStream(destPath, FileMode.CreateNew, FileAccess.Write, FileShare.None, 65536, true))
+                await f.CopyToAsync(output, ctx.RequestAborted);
+            writtenFiles.Add(destPath);
+
+            // Reject executable/archive binary headers disguised as .txt/.md
+            var header = new byte[Math.Min(8, (int)f.Length)];
+            await using (var checkStream = File.OpenRead(destPath))
+                _ = await checkStream.ReadAsync(header, ctx.RequestAborted);
+            if (header.Length >= 2 && ((header[0] == 'M' && header[1] == 'Z') ||
+                (header.Length >= 4 && header[0] == 0x7F && header[1] == 'E' && header[2] == 'L' && header[3] == 'F')))
+            {
+                throw new InvalidDataException($"File '{rawName}' là file thực thi nhị phân, không phải văn bản .md/.txt.");
+            }
+
+            var itemTitle = noteTitle != ""
+                ? (form.Files.Count > 1 ? $"{noteTitle} ({Path.GetFileNameWithoutExtension(rawName)})" : noteTitle)
+                : Path.GetFileNameWithoutExtension(rawName);
+            if (itemTitle.Length > 180) itemTitle = itemTitle[..180];
+            var now = Helpers.Now();
+            var actualSize = new FileInfo(destPath).Length;
+
+            await db.ExecAsync(@"INSERT INTO story_text_files(id,story_id,title,file_name,stored_name,extension,size_bytes,created_at)
+                VALUES(@id,@sid,@title,@fname,@sname,@ext,@size,@now)",
+                ("@id", textId), ("@sid", id), ("@title", itemTitle), ("@fname", rawName),
+                ("@sname", storedName), ("@ext", ext), ("@size", actualSize), ("@now", now));
+
+            createdItems.Add(new
+            {
+                id = textId,
+                story_id = id,
+                title = itemTitle,
+                file_name = rawName,
+                extension = ext,
+                size_bytes = actualSize,
+                created_at = now
+            });
+        }
+
+        await Helpers.Audit(db, Helpers.UserId(ctx.User), "story.text_upload", id,
+            $"count={createdItems.Count}; files={string.Join(", ", form.Files.Select(x => Path.GetFileName(x.FileName)))}");
+        return Results.Ok(new { count = createdItems.Count, items = createdItems });
+    }
+    catch (Exception ex)
+    {
+        foreach (var p in writtenFiles)
+        {
+            if (File.Exists(p))
+            {
+                try { File.Delete(p); } catch { }
+            }
+        }
+        if (ex is InvalidDataException) return Bad(ex.Message);
+        ctx.RequestServices.GetRequiredService<ILoggerFactory>().CreateLogger("TextUpload").LogError(ex, "Không thể lưu file chữ lên VPS");
+        return Bad("Lưu file chữ (.md, .txt) lên VPS thất bại.");
+    }
+}).DisableAntiforgery();
+
+admin.MapGet("/texts/{textId}/content", async Task<IResult> (string textId, HttpContext ctx, Database source) =>
+{
+    if (!Regex.IsMatch(textId, "^[a-f0-9]{32}$")) return Results.NotFound();
+    await using var db = await source.OpenAsync();
+    var row = await db.FirstAsync("SELECT * FROM story_text_files WHERE id=@id", ("@id", textId));
+    if (row is null) return Results.NotFound();
+    var path = Path.Combine(source.TextRoot, row.S("story_id"), row.S("stored_name"));
+    if (!File.Exists(path)) return Results.NotFound(new { error = "Không tìm thấy file chữ trên ổ đĩa VPS." });
+
+    const int maxPreviewBytes = 256 * 1024; // 256 KB preview in browser
+    var info = new FileInfo(path);
+    await using var fs = File.OpenRead(path);
+    var toRead = (int)Math.Min(info.Length, maxPreviewBytes);
+    var buffer = new byte[toRead];
+    var read = await fs.ReadAsync(buffer.AsMemory(0, toRead), ctx.RequestAborted);
+    using var ms = new MemoryStream(buffer, 0, read);
+    using var reader = new StreamReader(ms, System.Text.Encoding.UTF8, detectEncodingFromByteOrderMarks: true);
+    var content = await reader.ReadToEndAsync(ctx.RequestAborted);
+
+    return Results.Ok(new
+    {
+        id = row.S("id"),
+        storyId = row.S("story_id"),
+        title = row.S("title"),
+        fileName = row.S("file_name"),
+        extension = row.S("extension"),
+        sizeBytes = row.N("size_bytes"),
+        createdAt = row.S("created_at"),
+        truncated = info.Length > maxPreviewBytes,
+        content
+    });
+});
+
+admin.MapGet("/texts/{textId}/download", async Task<IResult> (string textId, Database source) =>
+{
+    if (!Regex.IsMatch(textId, "^[a-f0-9]{32}$")) return Results.NotFound();
+    await using var db = await source.OpenAsync();
+    var row = await db.FirstAsync("SELECT * FROM story_text_files WHERE id=@id", ("@id", textId));
+    if (row is null) return Results.NotFound();
+    var path = Path.Combine(source.TextRoot, row.S("story_id"), row.S("stored_name"));
+    if (!File.Exists(path)) return Results.NotFound();
+    var contentType = row.S("extension") == ".md" ? "text/markdown; charset=utf-8" : "text/plain; charset=utf-8";
+    return Results.File(path, contentType, fileDownloadName: row.S("file_name"));
+});
+
+admin.MapDelete("/texts/{textId}", async Task<IResult> (string textId, HttpContext ctx, Database source) =>
+{
+    if (!Regex.IsMatch(textId, "^[a-f0-9]{32}$")) return Results.NotFound();
+    await using var db = await source.OpenAsync();
+    var row = await db.FirstAsync("SELECT * FROM story_text_files WHERE id=@id", ("@id", textId));
+    if (row is null) return Results.NotFound();
+    await db.ExecAsync("DELETE FROM story_text_files WHERE id=@id", ("@id", textId));
+    var path = Path.Combine(source.TextRoot, row.S("story_id"), row.S("stored_name"));
+    if (File.Exists(path))
+    {
+        try { File.Delete(path); } catch { }
+    }
+    await Helpers.Audit(db, Helpers.UserId(ctx.User), "story.text_delete", row.S("story_id"),
+        $"textId={textId}; file={row.S("file_name")}");
+    return Results.Ok(new { message = "Đã xóa file chữ khỏi VPS." });
 });
 
 // Track long-running 30+ minute MP3 transcoding & Cloudflare R2 uploads so retries

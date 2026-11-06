@@ -64,6 +64,24 @@ window.lkh = (() => {
     document.getElementById('cover-file').value = '';
     return result;
   }
+  async function uploadStoryTexts(storyId, title = '') {
+    const input = document.getElementById('story-text-files');
+    const files = Array.from(input?.files || []);
+    if (files.length === 0) throw new Error('Hãy chọn ít nhất 1 file .md hoặc .txt trước khi upload.');
+    if (files.length > 100) throw new Error('Mỗi lần chỉ chọn tối đa 100 file chữ.');
+    const form = new FormData();
+    form.append('title', title || '');
+    for (const file of files) {
+      if (!/\.(md|txt)$/i.test(file.name))
+        throw new Error(`File "${file.name}" không hợp lệ. Chỉ nhận định dạng .md hoặc .txt.`);
+      if (file.size <= 0 || file.size > 50 * 1024 * 1024)
+        throw new Error(`File "${file.name}" phải lớn hơn 0 byte và tối đa 50MB.`);
+      form.append('files', file, file.name);
+    }
+    const result = await send(`/admin/stories/${encodeURIComponent(storyId)}/texts`, 'POST', form);
+    if (input) input.value = '';
+    return result;
+  }
   // Free -> direct 5-minute MP3 preview. Premium/Admin -> encrypted HLS only.
   // A browser cannot call the full MP3 route; the HLS playlist/segments/key are gated by server.
   let activeHls = null;
@@ -285,6 +303,6 @@ window.lkh = (() => {
   document.addEventListener('visibilitychange', () => {
     if (document.visibilityState === 'visible') silentReconnect();
   });
-  return { api: send, uploadEpisode, uploadCover, replaceEpisodeAudio, listen, stopAudio, bindAutoNext };
+  return { api: send, uploadEpisode, uploadCover, uploadStoryTexts, replaceEpisodeAudio, listen, stopAudio, bindAutoNext };
 })();
 window.lkh.reload = () => window.location.reload();

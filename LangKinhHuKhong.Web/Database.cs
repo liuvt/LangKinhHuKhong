@@ -12,6 +12,7 @@ public sealed class Database(IWebHostEnvironment environment)
             ? Path.Combine(environment.ContentRootPath, "data")
             : Environment.GetEnvironmentVariable("LKH_DATA_ROOT")!);
     public string AudioRoot => Path.Combine(DataRoot, "audio-private");
+    public string TextRoot => Path.Combine(DataRoot, "story-texts");
     private string ConnectionString => new SqliteConnectionStringBuilder
     {
         DataSource = Path.Combine(DataRoot, "langkinhhukhong.db"),
@@ -34,6 +35,7 @@ public sealed class Database(IWebHostEnvironment environment)
     {
         Directory.CreateDirectory(DataRoot);
         Directory.CreateDirectory(AudioRoot);
+        Directory.CreateDirectory(TextRoot);
         await using var db = await OpenAsync();
         await using (var wal = db.CreateCommand())
         {

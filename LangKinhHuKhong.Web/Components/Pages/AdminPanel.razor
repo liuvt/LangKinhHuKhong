@@ -28,6 +28,7 @@
             <div class="workflow-step"><span class="workflow-number">1</span><div><b>Thông tin truyện</b><small>Tạo tên, thể loại, giới thiệu</small></div></div>
             <div class="workflow-step"><span class="workflow-number">2</span><div><b>Ảnh đại diện</b><small>Upload hoặc thay ảnh trên R2</small></div></div>
             <div class="workflow-step"><span class="workflow-number">3</span><div><b>Danh sách tập MP3</b><small>Thêm, sửa, thay file, xóa</small></div></div>
+            <div class="workflow-step"><span class="workflow-number">4</span><div><b>Kho file chữ (.md, .txt)</b><small>Lưu trên VPS (0 hoặc nhiều file)</small></div></div>
         </div>
         <div class="two-column admin-columns grid gap-5">
             <div class="panel form rounded-2xl"><h2>@(editingStoryId == "" ? "Thêm bộ truyện" : "Chỉnh sửa bộ truyện")</h2>
@@ -48,7 +49,7 @@
                 <button class="btn btn-primary" disabled="@busy" @onclick="SaveStory">@(editingStoryId==""?"Tạo truyện":"Lưu cập nhật")</button>
                 @if(editingStoryId!=""){<button class="btn btn-outline" @onclick="NewStory">+ Thêm truyện mới</button>}
             </div>
-            <div class="panel rounded-2xl"><h2>Danh sách bộ truyện (@storyRows.Length)</h2><div class="admin-story-list">@foreach(var s in storyRows){<div class="admin-story-item rounded-xl"><div><b>@Ui.Str(s,"title")</b><small>@Ui.Str(s,"slug") · @Ui.Str(s,"status") · @Ui.Str(s,"genre_keys").Replace("|", " / ")</small></div><div class="table-actions"><button class="btn btn-sm btn-outline" @onclick="() => EditStory(s)">Sửa</button><button class="btn btn-sm btn-primary" @onclick='() => SelectStory(Ui.Str(s,"id"))'>Tập MP3</button></div></div>}</div></div>
+            <div class="panel rounded-2xl"><h2>Danh sách bộ truyện (@storyRows.Length)</h2><div class="admin-story-list">@foreach(var s in storyRows){<div class="admin-story-item rounded-xl"><div><b>@Ui.Str(s,"title")</b><small>@Ui.Str(s,"slug") · @Ui.Str(s,"status") · @Ui.Num(s,"episode_count") tập MP3 · @Ui.Num(s,"text_count") file chữ · @Ui.Str(s,"genre_keys").Replace("|", " / ")</small></div><div class="table-actions"><button class="btn btn-sm btn-outline" @onclick="() => EditStory(s)">Sửa</button><button class="btn btn-sm btn-primary" @onclick='() => SelectStory(Ui.Str(s,"id"))'>MP3 &amp; File chữ</button></div></div>}</div></div>
         </div>
         @if(!string.IsNullOrEmpty(activeStoryId))
         {
@@ -107,6 +108,79 @@
                         <p>"@deleteEpisodeTitle" sẽ bị xóa khỏi danh sách và lịch sử nghe. File Full/Preview trên R2 cũng sẽ được xóa (hoặc xếp hàng thử lại). Không thể hoàn tác.</p>
                         <button class="btn btn-danger" disabled="@busy" @onclick="DeleteEpisode">Xác nhận xóa tập</button>
                         <button class="btn btn-outline" disabled="@busy" @onclick='() => deleteEpisodeId = ""'>Giữ lại tập</button>
+                    </div>
+                }
+
+                <div class="divider"></div>
+                <h3 class="step-title"><span>4</span> Kho lưu trữ file chữ (.md, .txt) trên VPS</h3>
+                <p class="hint">Mỗi bộ truyện có thể không có hoặc lưu trữ nhiều file bản thảo chữ (<code>.md</code>, <code>.txt</code>) trực tiếp trên ổ đĩa dữ liệu của VPS (<code>story-texts/</code>). Cho phép chọn nhiều file cùng lúc.</p>
+                <div class="upload-grid">
+                    <label>Ghi chú / Tiêu đề (tùy chọn)
+                        <input @bind="textFileTitle" maxlength="180" placeholder="Ví dụ: Bản thảo quyển 1, Toàn văn..." />
+                    </label>
+                    <label>Chọn 1 hoặc nhiều file (.md, .txt · tối đa 50MB/file)
+                        <input type="file" id="story-text-files" multiple accept=".md,.txt,text/markdown,text/plain" />
+                    </label>
+                    <button class="btn btn-primary" disabled="@busy" @onclick="UploadStoryTexts">@(uploadingTexts ? "⏳ Đang lưu lên VPS..." : "↑ Upload file chữ lên VPS")</button>
+                </div>
+                <div class="episode-list-toolbar">
+                    <span><b>Danh sách file chữ trên VPS (@textFileRows.Length)</b><small>Lưu trữ nội bộ tại thư mục dữ liệu VPS của bộ truyện</small></span>
+                </div>
+                @if (textFileRows.Length == 0)
+                {
+                    <p class="hint">Bộ truyện này hiện chưa có file chữ nào (cho phép để trống hoặc tải lên nhiều file .md, .txt).</p>
+                }
+                else
+                {
+                    <div class="table-scroll overflow-x-auto">
+                        <table>
+                            <thead>
+                                <tr>
+                                    <th>Tiêu đề / Ghi chú</th>
+                                    <th>Tên file gốc</th>
+                                    <th>Định dạng</th>
+                                    <th>Dung lượng</th>
+                                    <th>Ngày lưu</th>
+                                    <th></th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                @foreach (var tf in textFileRows)
+                                {
+                                    var tfId = Ui.Str(tf, "id");
+                                    <tr @key="tfId">
+                                        <td><b>@Ui.Str(tf, "title")</b></td>
+                                        <td class="mono">@Ui.Str(tf, "file_name")</td>
+                                        <td><span class="pill">@Ui.Str(tf, "extension").ToUpperInvariant()</span></td>
+                                        <td>@Ui.FileSize(Ui.Num(tf, "size_bytes"))</td>
+                                        <td>@Ui.Date(Ui.Str(tf, "created_at"))</td>
+                                        <td>
+                                            <div class="table-actions">
+                                                <button class="btn btn-sm btn-outline" disabled="@busy" @onclick="() => PreviewTextFile(tfId)">Xem nội dung</button>
+                                                <a class="btn btn-sm btn-outline" href="/api/admin/texts/@Uri.EscapeDataString(tfId)/download" target="_blank" rel="noopener">↓ Tải về</a>
+                                                <button class="btn btn-sm btn-danger-outline" disabled="@busy" @onclick="() => DeleteTextFile(tf)">Xóa</button>
+                                            </div>
+                                        </td>
+                                    </tr>
+                                }
+                            </tbody>
+                        </table>
+                    </div>
+                }
+                @if (previewTextId != "")
+                {
+                    <div class="inline-editor text-preview-panel">
+                        <div class="episode-list-toolbar">
+                            <div>
+                                <h3>📄 @previewTextFileName</h3>
+                                <small>@Ui.FileSize(previewTextSize) · @(previewTextTruncated ? "Đang hiển thị 256 KB đầu tiên (tải về để xem toàn bộ)" : "Hiển thị toàn bộ nội dung")</small>
+                            </div>
+                            <div class="table-actions">
+                                <a class="btn btn-sm btn-primary" href="/api/admin/texts/@Uri.EscapeDataString(previewTextId)/download" target="_blank" rel="noopener">↓ Tải file gốc</a>
+                                <button class="btn btn-sm btn-outline" @onclick='() => { previewTextId = ""; previewTextContent = ""; }'>Đóng</button>
+                            </div>
+                        </div>
+                        <pre class="story-text-preview-box">@previewTextContent</pre>
                     </div>
                 }
             </div>
@@ -215,10 +289,13 @@
     private string tab="stories",message="",activeStoryId="",editingStoryId="",episodeTitle="",editEpisodeId="",editEpisodeTitle="",editEpisodeStatus="Published",deleteEpisodeId="",deleteEpisodeTitle="",editUserId="",editUsername="",editFullName="",editPhone="",editAddress="",editStatus="Active",grantReason="",activeOrderId="",activeOrderCode="",activeOrderStatus="",bankReference="",rejectReason="";
     private int episodeNumber=1,editEpisodeNumber=1,grantMonths=1,premiumPrice=100000,activeOrderAmount=0;
     private bool loading=true,busy=false,failed=false;
-    private bool uploadingAudio=false,refreshingEpisodes=false;
+    private bool uploadingAudio=false,refreshingEpisodes=false,uploadingTexts=false;
     private string uploadStatus="",lastUploadedEpisodeId="";
+    private string textFileTitle="",previewTextId="",previewTextFileName="",previewTextContent="";
+    private int previewTextSize=0;
+    private bool previewTextTruncated=false;
     private JsonElement stats,storageInfo;
-    private JsonElement[] storyRows=[],episodeRows=[],userRows=[],orderRows=[],auditRows=[],genreRows=[],reviewRows=[];
+    private JsonElement[] storyRows=[],episodeRows=[],textFileRows=[],userRows=[],orderRows=[],auditRows=[],genreRows=[],reviewRows=[];
     private string newGenreName="",editGenreSlug="",editGenreName="";
     private bool editGenreActive=true;
     private StoryForm story=new();
@@ -318,7 +395,10 @@
         editEpisodeId="";
         deleteEpisodeId="";
         lastUploadedEpisodeId="";
+        previewTextId="";
+        previewTextContent="";
         episodeRows=[];
+        textFileRows=[];
         await LoadEpisodes();
     }
     // Returns false instead of announcing success if the list could not be loaded.
@@ -329,14 +409,17 @@
         if (string.IsNullOrWhiteSpace(storyId))
         {
             episodeRows=[];
+            textFileRows=[];
             await InvokeAsync(StateHasChanged);
             return true;
         }
         try
         {
             var fresh=Ui.Array(await Api.Get("/admin/stories/"+Uri.EscapeDataString(storyId)+"/episodes"));
+            var freshTexts=Ui.Array(await Api.Get("/admin/stories/"+Uri.EscapeDataString(storyId)+"/texts"));
             if (storyId!=activeStoryId) return false;
             episodeRows=fresh;
+            textFileRows=freshTexts;
             await InvokeAsync(StateHasChanged);
             return true;
         }
@@ -344,6 +427,80 @@
         {
             if (notifyOnError) Notify("Không tải được danh sách tập: "+e.Message,true);
             return false;
+        }
+    }
+    private async Task UploadStoryTexts()
+    {
+        if (busy) return;
+        if (activeStoryId=="") { Notify("Chưa chọn bộ truyện.",true); return; }
+        busy=true;
+        uploadingTexts=true;
+        await InvokeAsync(StateHasChanged);
+        try
+        {
+            var res = await Api.UploadStoryTexts(activeStoryId, textFileTitle);
+            var count = Ui.Num(res, "count");
+            textFileTitle = "";
+            await LoadEpisodes(false);
+            storyRows = Ui.Array(await Api.Get("/admin/stories"));
+            Notify($"Đã lưu thành công {count} file chữ (.md/.txt) vào VPS cho bộ truyện.");
+        }
+        catch (Exception e)
+        {
+            Notify("Upload file chữ thất bại: " + e.Message, true);
+        }
+        finally
+        {
+            busy=false;
+            uploadingTexts=false;
+            await InvokeAsync(StateHasChanged);
+        }
+    }
+    private async Task PreviewTextFile(string textId)
+    {
+        if (string.IsNullOrWhiteSpace(textId)) return;
+        busy=true;
+        try
+        {
+            var detail = await Api.Get("/admin/texts/" + Uri.EscapeDataString(textId) + "/content");
+            previewTextId = Ui.Str(detail, "id");
+            previewTextFileName = Ui.Str(detail, "fileName");
+            previewTextSize = Ui.Num(detail, "sizeBytes");
+            previewTextTruncated = Ui.Bool(detail, "truncated");
+            previewTextContent = Ui.Str(detail, "content");
+        }
+        catch (Exception e)
+        {
+            Notify("Không đọc được file chữ: " + e.Message, true);
+        }
+        finally
+        {
+            busy=false;
+            await InvokeAsync(StateHasChanged);
+        }
+    }
+    private async Task DeleteTextFile(JsonElement tf)
+    {
+        var tfId = Ui.Str(tf, "id");
+        var fname = Ui.Str(tf, "file_name");
+        if (string.IsNullOrWhiteSpace(tfId)) return;
+        busy=true;
+        try
+        {
+            await Api.Delete("/admin/texts/" + Uri.EscapeDataString(tfId));
+            if (previewTextId == tfId) { previewTextId = ""; previewTextContent = ""; }
+            await LoadEpisodes(false);
+            storyRows = Ui.Array(await Api.Get("/admin/stories"));
+            Notify($"Đã xóa file chữ '{fname}' khỏi VPS.");
+        }
+        catch (Exception e)
+        {
+            Notify("Không xóa được file chữ: " + e.Message, true);
+        }
+        finally
+        {
+            busy=false;
+            await InvokeAsync(StateHasChanged);
         }
     }
     private async Task RefreshEpisodeList()

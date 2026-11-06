@@ -36,4 +36,11 @@ public static class Ui
         var ss = s % 60;
         return h > 0 ? $"{h}:{m:00}:{ss:00}" : $"{m:00}:{ss:00}";
     }
+    public static string FileSize(int bytes)
+    {
+        var b = Math.Max(0, bytes);
+        if (b >= 1024 * 1024) return (b / (1024.0 * 1024.0)).ToString("0.##", CultureInfo.GetCultureInfo("vi-VN")) + " MB";
+        if (b >= 1024) return (b / 1024.0).ToString("0.#", CultureInfo.GetCultureInfo("vi-VN")) + " KB";
+        return b + " B";
+    }
 }

@@ -187,3 +187,16 @@ CREATE TABLE IF NOT EXISTS playback_sessions (
  episode_id TEXT NOT NULL REFERENCES episodes(id) ON DELETE CASCADE,
  last_tick INTEGER NOT NULL
 );
+
+-- Story text manuscripts (.md, .txt) stored on VPS per story (0..N files per story).
+CREATE TABLE IF NOT EXISTS story_text_files (
+ id TEXT PRIMARY KEY,
+ story_id TEXT NOT NULL REFERENCES stories(id) ON DELETE CASCADE,
+ title TEXT NOT NULL DEFAULT '',
+ file_name TEXT NOT NULL,
+ stored_name TEXT NOT NULL,
+ extension TEXT NOT NULL CHECK(extension IN ('.md','.txt')),
+ size_bytes INTEGER NOT NULL DEFAULT 0,
+ created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS ix_story_text_files_story ON story_text_files(story_id, created_at DESC);
