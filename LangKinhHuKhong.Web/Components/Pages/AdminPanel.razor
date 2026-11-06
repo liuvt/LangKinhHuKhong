@@ -1,4 +1,5 @@
 @inject BrowserApi Api
+@inject NavigationManager Navigation
 
 <section class="section top-section admin-page">
     <div class="section-heading"><div><small>ADMIN DASHBOARD</small><h1>Trung tâm quản trị</h1><p>Thành viên · Kho Audio · Gói Premium · Đơn hàng VietQR</p></div><button class="btn btn-outline" @onclick="Reload">↻ Tải lại</button></div>
@@ -142,6 +143,7 @@
                                     <th>Tên file gốc</th>
                                     <th>Định dạng</th>
                                     <th>Dung lượng</th>
+                                    <th>Lưu trữ</th>
                                     <th>Cập nhật</th>
                                     <th></th>
                                 </tr>
@@ -150,17 +152,27 @@
                                 @foreach (var tf in textFileRows)
                                 {
                                     var tfId = Ui.Str(tf, "id");
+                                    var driveId = Ui.Str(tf, "drive_file_id");
                                     <tr @key="tfId">
                                         <td><b>@Ui.Str(tf, "title")</b></td>
                                         <td class="mono">@Ui.Str(tf, "file_name")</td>
                                         <td><span class="pill">@Ui.Str(tf, "extension").ToUpperInvariant()</span></td>
                                         <td>@Ui.FileSize(Ui.Num(tf, "size_bytes"))</td>
+                                        <td>
+                                            <span class="storage-pill @(driveId != "" ? "storage-r2" : "storage-local")">
+                                                @(driveId != "" ? "☁ VPS + Drive" : "💾 VPS")
+                                            </span>
+                                        </td>
                                         <td>@Ui.Date(Ui.Str(tf, "updated_at") != "" ? Ui.Str(tf, "updated_at") : Ui.Str(tf, "created_at"))</td>
                                         <td>
                                             <div class="table-actions">
                                                 <button class="btn btn-sm btn-primary" disabled="@busy" @onclick="() => OpenInNotepad(tfId)">✎ Sửa Notepad</button>
                                                 <button class="btn btn-sm btn-outline" disabled="@busy" @onclick="() => PreviewTextFile(tfId)">Xem nhanh</button>
                                                 <a class="btn btn-sm btn-outline" href="/api/admin/texts/@Uri.EscapeDataString(tfId)/download" target="_blank" rel="noopener">↓ Tải về</a>
+                                                @if (driveId != "")
+                                                {
+                                                    <a class="btn btn-sm btn-outline" href="https://drive.google.com/file/d/@Uri.EscapeDataString(driveId)/view" target="_blank" rel="noopener">↗ Drive</a>
+                                                }
                                                 <button class="btn btn-sm btn-danger-outline" disabled="@busy" @onclick="() => DeleteTextFile(tf)">Xóa</button>
                                             </div>
                                         </td>
@@ -191,11 +203,173 @@
     }
     else if(tab=="notepad")
     {
-        <div class="panel rounded-2xl">
+        <div class="panel rounded-2xl gdrive-sync-panel">
+            <div class="episode-list-toolbar">
+                <div>
+                    <h2>☁ Liên kết &amp; Đồng bộ Google Drive (OAuth 2.0)</h2>
+                    @if (Ui.Bool(gdriveStatus, "connected"))
+                    {
+                        <p class="hint">
+                            <span class="storage-pill storage-r2">● Đã kết nối Google Drive</span>
+                            Tài khoản: <b>@(Ui.Str(gdriveStatus, "email") != "" ? Ui.Str(gdriveStatus, "email") : Ui.Str(gdriveStatus, "displayName"))</b>
+                            · Thư mục gốc: <code>@Ui.Str(gdriveStatus, "rootFolderName")</code>
+                            · Mọi thao tác Tạo / Sửa / Upload / Xóa file chữ đều tự động đồng bộ 2 chiều với Google Drive.
+                        </p>
+                    }
+                    else if (Ui.Bool(gdriveStatus, "hasClientConfig"))
+                    {
+                        <p class="hint">
+                            <span class="storage-pill storage-local">○ Đã nạp OAuth Client (@Ui.Str(gdriveStatus, "clientIdPreview"))</span>
+                            Bấm <b>"🔗 Kết nối tài khoản Google Drive"</b> bên phải để cấp quyền cho ứng dụng quản lý thư mục <code>@(Ui.Str(gdriveStatus, "rootFolderName") != "" ? Ui.Str(gdriveStatus, "rootFolderName") : "LangKinhHuKhong-BanThao")</code> trên Google Drive của bạn.
+                        </p>
+                    }
+                    else
+                    {
+                        <p class="hint">Chưa cấu hình OAuth Client ID/Secret. Bạn có thể nhập Client ID &amp; Client Secret bên dưới để kết nối Google Drive.</p>
+                    }
+                </div>
+                <div class="table-actions">
+                    @if (Ui.Bool(gdriveStatus, "connected"))
+                    {
+                        <button class="btn btn-primary" disabled="@(busy || syncingDrive)" @onclick="SyncPushToDrive">@(syncingDrive ? "⏳ Đang đồng bộ..." : "☁ Đẩy toàn bộ VPS → Drive")</button>
+                        <button class="btn btn-outline" disabled="@(busy || syncingDrive)" @onclick="SyncPullFromDrive">⇄ Kéo file từ Drive → VPS</button>
+                        <button class="btn btn-outline" disabled="@busy" @onclick="ToggleDriveExplorer">@(showDriveExplorer ? "▲ Ẩn trình duyệt Drive" : "📂 Quản lý trực tiếp trên Drive")</button>
+                        @if (Ui.Str(gdriveStatus, "rootFolderUrl") != "")
+                        {
+                            <a class="btn btn-outline" href="@Ui.Str(gdriveStatus, "rootFolderUrl")" target="_blank" rel="noopener">↗ Mở Google Drive</a>
+                        }
+                        <a class="btn btn-outline" href="/api/admin/gdrive/connect">↻ Đổi tài khoản</a>
+                        <button class="btn btn-danger-outline" disabled="@busy" @onclick="DisconnectGoogleDrive">Ngắt kết nối</button>
+                    }
+                    else
+                    {
+                        @if (Ui.Bool(gdriveStatus, "hasClientConfig"))
+                        {
+                            <a class="btn btn-primary" href="/api/admin/gdrive/connect">🔗 Kết nối tài khoản Google Drive</a>
+                        }
+                        <button class="btn btn-outline" @onclick="() => showGdriveConfig = !showGdriveConfig">⚙ Cấu hình OAuth Client</button>
+                    }
+                </div>
+            </div>
+
+            @if (showGdriveConfig)
+            {
+                <div class="inline-editor top-margin">
+                    <h3>⚙ Cấu hình Google Cloud OAuth 2.0 Client</h3>
+                    <p class="hint">Authorized redirect URI cần khai báo trong Google Cloud Console: <code>@($"{Navigation.BaseUri.TrimEnd('/')}/api/admin/gdrive/callback")</code></p>
+                    <div class="upload-grid">
+                        <label>Client ID
+                            <input @bind="gdriveClientIdInput" placeholder="...apps.googleusercontent.com" />
+                        </label>
+                        <label>Client Secret
+                            <input type="password" @bind="gdriveClientSecretInput" placeholder="GOCSPX-..." />
+                        </label>
+                        <label>Tên thư mục gốc trên Google Drive
+                            <input @bind="gdriveRootFolderInput" placeholder="LangKinhHuKhong-BanThao" />
+                        </label>
+                        <button class="btn btn-primary" disabled="@busy" @onclick="SaveGoogleDriveConfig">Lưu cấu hình OAuth</button>
+                    </div>
+                </div>
+            }
+
+            @if (showDriveExplorer && Ui.Bool(gdriveStatus, "connected"))
+            {
+                <div class="inline-editor top-margin">
+                    <div class="episode-list-toolbar">
+                        <div>
+                            <h3>📂 Trình quản lý file trực tiếp trên Google Drive (CRUD)</h3>
+                            <small>
+                                Đang xem:
+                                <button class="text-link" disabled="@busy" @onclick='() => BrowseDriveFolder("", "Thư mục gốc (" + Ui.Str(gdriveStatus, "rootFolderName") + ")")'>☁ @Ui.Str(gdriveStatus, "rootFolderName")</button>
+                                @if (!string.IsNullOrWhiteSpace(driveCurrentFolderName) && driveCurrentFolderId != Ui.Str(gdriveStatus, "rootFolderId"))
+                                {
+                                    <span> / <b>@driveCurrentFolderName</b></span>
+                                }
+                            </small>
+                        </div>
+                        <div class="table-actions">
+                            <button class="btn btn-sm btn-primary" disabled="@busy" @onclick="StartNewDriveDirectNotepad">+ Tạo file .txt/.md trực tiếp trên Drive</button>
+                            <button class="btn btn-sm btn-outline" disabled="@busy" @onclick="() => BrowseDriveFolder(driveCurrentFolderId, driveCurrentFolderName)">↻ Làm mới Drive</button>
+                        </div>
+                    </div>
+
+                    <div class="upload-grid" style="margin-top:0.65rem">
+                        <label>Tạo thư mục con mới trên Google Drive (trong thư mục hiện tại)
+                            <input @bind="driveNewFolderName" maxlength="150" placeholder="Nhập tên thư mục mới..." />
+                        </label>
+                        <button class="btn btn-outline" disabled="@busy" @onclick="CreateDriveSubfolder">+ Tạo thư mục trên Drive</button>
+                    </div>
+
+                    @if (driveItems.Length == 0)
+                    {
+                        <p class="hint" style="margin-top:0.75rem">Thư mục Google Drive này hiện đang trống.</p>
+                    }
+                    else
+                    {
+                        <div class="table-scroll overflow-x-auto" style="margin-top:0.75rem">
+                            <table>
+                                <thead>
+                                    <tr>
+                                        <th>Loại</th>
+                                        <th>Tên trên Google Drive</th>
+                                        <th>Dung lượng</th>
+                                        <th>Cập nhật trên Drive</th>
+                                        <th></th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    @foreach (var item in driveItems)
+                                    {
+                                        var dId = Ui.Str(item, "id");
+                                        var dName = Ui.Str(item, "name");
+                                        var isFolder = Ui.Bool(item, "isFolder");
+                                        var webLink = Ui.Str(item, "webViewLink");
+                                        <tr @key="dId">
+                                            <td><span class="pill">@(isFolder ? "📁 THƯ MỤC" : "📄 FILE")</span></td>
+                                            <td>
+                                                @if (isFolder)
+                                                {
+                                                    <button class="text-link" disabled="@busy" @onclick="() => BrowseDriveFolder(dId, dName)"><b>📁 @dName</b></button>
+                                                }
+                                                else
+                                                {
+                                                    <span class="mono">@dName</span>
+                                                }
+                                            </td>
+                                            <td>@(isFolder ? "—" : Ui.FileSize(Ui.Num(item, "sizeBytes")))</td>
+                                            <td>@Ui.Date(Ui.Str(item, "modifiedTime"))</td>
+                                            <td>
+                                                <div class="table-actions">
+                                                    @if (isFolder)
+                                                    {
+                                                        <button class="btn btn-sm btn-outline" disabled="@busy" @onclick="() => BrowseDriveFolder(dId, dName)">Mở thư mục</button>
+                                                    }
+                                                    else
+                                                    {
+                                                        <button class="btn btn-sm btn-primary" disabled="@busy" @onclick="() => OpenDriveFileInNotepad(dId)">✎ Sửa trên Notepad</button>
+                                                    }
+                                                    @if (webLink != "")
+                                                    {
+                                                        <a class="btn btn-sm btn-outline" href="@webLink" target="_blank" rel="noopener">↗ Xem trên Drive</a>
+                                                    }
+                                                    <button class="btn btn-sm btn-danger-outline" disabled="@busy" @onclick="() => DeleteDriveItemDirect(item)">Xóa khỏi Drive</button>
+                                                </div>
+                                            </td>
+                                        </tr>
+                                    }
+                                </tbody>
+                            </table>
+                        </div>
+                    }
+                </div>
+            }
+        </div>
+
+        <div class="panel top-margin rounded-2xl">
             <div class="episode-list-toolbar">
                 <div>
                     <h2>📝 Quản lý Bản thảo (.md, .txt) &amp; Notepad Online</h2>
-                    <p class="hint">Quản lý tập trung toàn bộ file chữ trên VPS (CRUD: Tạo mới, Upload nhiều file, Sửa trực tiếp nội dung bằng Notepad Online, Tải về, Xóa). Chỉ Admin có quyền truy cập.</p>
+                    <p class="hint">Quản lý tập trung toàn bộ file chữ trên VPS &amp; Google Drive (CRUD: Tạo mới, Upload nhiều file, Sửa trực tiếp nội dung bằng Notepad Online, Tải về, Xóa). Chỉ Admin có quyền truy cập.</p>
                 </div>
                 <div class="table-actions">
                     <button class="btn btn-primary" disabled="@busy" @onclick="() => StartNewNotepadForStory(notepadFilterStoryId)">+ Soạn file mới trên Notepad</button>
@@ -219,7 +393,7 @@
                 <label>Chọn 1 hoặc nhiều file (.md, .txt · tối đa 50MB/file)
                     <input type="file" id="notepad-text-files" multiple accept=".md,.txt,text/markdown,text/plain" />
                 </label>
-                <button class="btn btn-outline" disabled="@busy" @onclick="UploadFromNotepadTab">@(uploadingTexts ? "⏳ Đang lưu lên VPS..." : "↑ Upload file lên VPS")</button>
+                <button class="btn btn-outline" disabled="@busy" @onclick="UploadFromNotepadTab">@(uploadingTexts ? "⏳ Đang lưu lên VPS & Drive..." : "↑ Upload file lên VPS & Drive")</button>
             </div>
 
             <div class="divider"></div>
@@ -241,7 +415,7 @@
 
             @if (FilteredAllTextFiles.Length == 0)
             {
-                <p class="hint">Không có file chữ (.md, .txt) nào khớp bộ lọc. Bạn có thể bấm "+ Soạn file mới trên Notepad" hoặc upload file từ máy tính.</p>
+                <p class="hint">Không có file chữ (.md, .txt) nào khớp bộ lọc. Bạn có thể bấm "+ Soạn file mới trên Notepad", upload file từ máy tính, hoặc kéo từ Google Drive.</p>
             }
             else
             {
@@ -254,6 +428,7 @@
                                 <th>Tên file</th>
                                 <th>Định dạng</th>
                                 <th>Dung lượng</th>
+                                <th>Đồng bộ</th>
                                 <th>Cập nhật lúc</th>
                                 <th></th>
                             </tr>
@@ -262,17 +437,27 @@
                             @foreach (var tf in FilteredAllTextFiles)
                             {
                                 var tfId = Ui.Str(tf, "id");
+                                var driveId = Ui.Str(tf, "drive_file_id");
                                 <tr @key="tfId" class="@(tfId == notepadFileId && notepadOpen ? "episode-just-uploaded" : "")">
                                     <td><b>@Ui.Str(tf, "story_title")</b></td>
                                     <td>@Ui.Str(tf, "title")</td>
                                     <td class="mono">@Ui.Str(tf, "file_name")</td>
                                     <td><span class="pill">@Ui.Str(tf, "extension").ToUpperInvariant()</span></td>
                                     <td>@Ui.FileSize(Ui.Num(tf, "size_bytes"))</td>
+                                    <td>
+                                        <span class="storage-pill @(driveId != "" ? "storage-r2" : "storage-local")">
+                                            @(driveId != "" ? "☁ VPS + Drive" : "💾 Chỉ VPS")
+                                        </span>
+                                    </td>
                                     <td>@Ui.Date(Ui.Str(tf, "updated_at") != "" ? Ui.Str(tf, "updated_at") : Ui.Str(tf, "created_at"))</td>
                                     <td>
                                         <div class="table-actions">
                                             <button class="btn btn-sm btn-primary" disabled="@busy" @onclick="() => OpenInNotepad(tfId)">✎ Mở Notepad</button>
                                             <a class="btn btn-sm btn-outline" href="/api/admin/texts/@Uri.EscapeDataString(tfId)/download" target="_blank" rel="noopener">↓ Tải về</a>
+                                            @if (driveId != "")
+                                            {
+                                                <a class="btn btn-sm btn-outline" href="https://drive.google.com/file/d/@Uri.EscapeDataString(driveId)/view" target="_blank" rel="noopener">↗ Drive</a>
+                                            }
                                             <button class="btn btn-sm btn-danger-outline" disabled="@busy" @onclick="() => AskDeleteNotepadFile(tf)">Xóa</button>
                                         </div>
                                     </td>
@@ -286,8 +471,8 @@
             @if (deleteNotepadFileId != "")
             {
                 <div class="delete-confirm-panel top-margin">
-                    <strong>Xác nhận xóa vĩnh viễn file chữ trên VPS?</strong>
-                    <p>File "<b>@deleteNotepadFileName</b>" sẽ bị xóa khỏi bộ truyện và ổ đĩa VPS. Thao tác này không thể hoàn tác.</p>
+                    <strong>Xác nhận xóa vĩnh viễn file chữ trên VPS @(Ui.Bool(gdriveStatus, "connected") ? "& Google Drive" : "")?</strong>
+                    <p>File "<b>@deleteNotepadFileName</b>" sẽ bị xóa khỏi bộ truyện, ổ đĩa VPS @(Ui.Bool(gdriveStatus, "connected") ? "và trên Google Drive" : ""). Thao tác này không thể hoàn tác.</p>
                     <button class="btn btn-danger" disabled="@busy" @onclick="ConfirmDeleteNotepadFile">Xác nhận xóa file</button>
                     <button class="btn btn-outline" disabled="@busy" @onclick='() => { deleteNotepadFileId = ""; deleteNotepadFileName = ""; }'>Hủy</button>
                 </div>
@@ -299,13 +484,13 @@
             <div class="panel top-margin rounded-2xl notepad-editor-shell">
                 <div class="episode-list-toolbar">
                     <div>
-                        <h2>@(notepadFileId == "" ? "✨ Tạo file chữ mới trên VPS (Notepad Online)" : $"✎ Đang chỉnh sửa: {notepadFileName}")</h2>
-                        <small>@(notepadFileId == "" ? "Nhập nội dung văn bản bên dưới và bấm Lưu để tạo file trực tiếp trên VPS" : $"Cập nhật lần cuối: {Ui.Date(notepadUpdatedAt)} · Dung lượng trên đĩa: {Ui.FileSize(notepadSizeBytes)}")</small>
+                        <h2>@(notepadDriveOnlyMode ? (notepadDriveFileId == "" ? "☁ Tạo file mới trực tiếp trên Google Drive" : $"☁ Đang sửa trực tiếp trên Google Drive: {notepadFileName}") : (notepadFileId == "" ? "✨ Tạo file chữ mới trên VPS & Drive (Notepad Online)" : $"✎ Đang chỉnh sửa: {notepadFileName}"))</h2>
+                        <small>@(notepadDriveOnlyMode ? "Chế độ sửa trực tiếp trên Google Drive" : (notepadFileId == "" ? "Nhập nội dung văn bản bên dưới và bấm Lưu để tạo file trên VPS & tự động đẩy lên Google Drive" : $"Cập nhật lần cuối: {Ui.Date(notepadUpdatedAt)} · Dung lượng: {Ui.FileSize(notepadSizeBytes)}"))</small>
                     </div>
                     <div class="table-actions">
-                        <button class="btn btn-primary" disabled="@(busy || savingNotepad)" @onclick="SaveNotepadFile">@(savingNotepad ? "⏳ Đang lưu lên VPS..." : "💾 Lưu thay đổi lên VPS")</button>
+                        <button class="btn btn-primary" disabled="@(busy || savingNotepad)" @onclick="SaveNotepadFile">@(savingNotepad ? "⏳ Đang lưu..." : (notepadDriveOnlyMode ? "☁ Lưu trực tiếp lên Google Drive" : "💾 Lưu thay đổi (VPS + Drive)"))</button>
                         <button class="btn btn-outline" disabled="@busy" @onclick="CopyNotepadText">📋 Sao chép toàn bộ</button>
-                        @if (notepadFileId != "")
+                        @if (!notepadDriveOnlyMode && notepadFileId != "")
                         {
                             <button class="btn btn-outline" disabled="@busy" @onclick="() => OpenInNotepad(notepadFileId)">↻ Tải lại bản gốc</button>
                             <a class="btn btn-outline" href="/api/admin/texts/@Uri.EscapeDataString(notepadFileId)/download" target="_blank" rel="noopener">↓ Tải về máy</a>
@@ -315,18 +500,21 @@
                 </div>
 
                 <div class="upload-grid top-margin">
-                    <label>Thuộc bộ truyện
-                        <select @bind="notepadStoryId">
-                            <option value="">-- Chọn bộ truyện --</option>
-                            @foreach (var s in storyRows)
-                            {
-                                <option value="@Ui.Str(s, "id")">@Ui.Str(s, "title")</option>
-                            }
-                        </select>
-                    </label>
-                    <label>Tiêu đề / Ghi chú
-                        <input @bind="notepadTitle" maxlength="180" placeholder="Ví dụ: Chương 1 - Mở đầu" />
-                    </label>
+                    @if (!notepadDriveOnlyMode)
+                    {
+                        <label>Thuộc bộ truyện
+                            <select @bind="notepadStoryId">
+                                <option value="">-- Chọn bộ truyện --</option>
+                                @foreach (var s in storyRows)
+                                {
+                                    <option value="@Ui.Str(s, "id")">@Ui.Str(s, "title")</option>
+                                }
+                            </select>
+                        </label>
+                        <label>Tiêu đề / Ghi chú
+                            <input @bind="notepadTitle" maxlength="180" placeholder="Ví dụ: Chương 1 - Mở đầu" />
+                        </label>
+                    }
                     <label>Tên file lưu trữ (.md hoặc .txt)
                         <input @bind="notepadFileName" maxlength="200" placeholder="chuong-01.txt" />
                     </label>
@@ -340,7 +528,7 @@
 
                 <div class="notepad-statusbar">
                     <span id="admin-notepad-stats" class="mono">1 dòng · 0 từ · 0 ký tự</span>
-                    <span>Mã hóa: <b>UTF-8</b> · Lưu trữ: <b>VPS Private Storage (<code>story-texts/</code>)</b> · Phím <code>Tab</code> hỗ trợ thụt lề 2 khoảng trắng</span>
+                    <span>Mã hóa: <b>UTF-8</b> · Lưu trữ: <b>@(notepadDriveOnlyMode ? "Google Drive Direct" : (Ui.Bool(gdriveStatus, "connected") ? "VPS + Google Drive Sync" : "VPS Private Storage (story-texts/)"))</b> · Phím <code>Tab</code> hỗ trợ thụt lề 2 khoảng trắng</span>
                 </div>
 
                 <textarea id="admin-notepad-editor" class="online-notepad-textarea" spellcheck="false" placeholder="Nhập hoặc dán nội dung văn bản (.md / .txt) tại đây..."></textarea>
@@ -451,14 +639,17 @@
     private int episodeNumber=1,editEpisodeNumber=1,grantMonths=1,premiumPrice=100000,activeOrderAmount=0;
     private bool loading=true,busy=false,failed=false;
     private bool uploadingAudio=false,refreshingEpisodes=false,uploadingTexts=false,notepadOpen=false,savingNotepad=false;
+    private bool syncingDrive=false,showDriveExplorer=false,showGdriveConfig=false,notepadDriveOnlyMode=false;
     private string uploadStatus="",lastUploadedEpisodeId="";
     private string textFileTitle="",previewTextId="",previewTextFileName="",previewTextContent="";
     private string notepadFilterStoryId="",notepadSearch="",notepadUploadStoryId="",notepadUploadTitle="";
-    private string notepadFileId="",notepadStoryId="",notepadTitle="",notepadFileName="",notepadExtension=".txt",notepadUpdatedAt="",deleteNotepadFileId="",deleteNotepadFileName="";
+    private string notepadFileId="",notepadDriveFileId="",notepadStoryId="",notepadTitle="",notepadFileName="",notepadExtension=".txt",notepadUpdatedAt="",deleteNotepadFileId="",deleteNotepadFileName="";
+    private string gdriveClientIdInput="",gdriveClientSecretInput="",gdriveRootFolderInput="LangKinhHuKhong-BanThao";
+    private string driveCurrentFolderId="",driveCurrentFolderName="",driveNewFolderName="";
     private int previewTextSize=0,notepadSizeBytes=0;
     private bool previewTextTruncated=false;
-    private JsonElement stats,storageInfo;
-    private JsonElement[] storyRows=[],episodeRows=[],textFileRows=[],allTextFileRows=[],userRows=[],orderRows=[],auditRows=[],genreRows=[],reviewRows=[];
+    private JsonElement stats,storageInfo,gdriveStatus;
+    private JsonElement[] storyRows=[],episodeRows=[],textFileRows=[],allTextFileRows=[],driveItems=[],userRows=[],orderRows=[],auditRows=[],genreRows=[],reviewRows=[];
     private JsonElement[] FilteredAllTextFiles => allTextFileRows.Where(tf =>
         (string.IsNullOrWhiteSpace(notepadFilterStoryId) || Ui.Str(tf, "story_id") == notepadFilterStoryId) &&
         (string.IsNullOrWhiteSpace(notepadSearch) ||
@@ -475,7 +666,40 @@
     
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
-        if(firstRender){await Reload();StateHasChanged();}
+        if(firstRender)
+        {
+            CheckQueryFlags();
+            await Reload();
+            StateHasChanged();
+        }
+    }
+    private void CheckQueryFlags()
+    {
+        try
+        {
+            var uri = new Uri(Navigation.Uri);
+            if (string.IsNullOrWhiteSpace(uri.Query)) return;
+            var parts = uri.Query.TrimStart('?').Split('&', StringSplitOptions.RemoveEmptyEntries);
+            foreach (var p in parts)
+            {
+                var kv = p.Split('=', 2);
+                if (kv.Length == 0) continue;
+                var k = Uri.UnescapeDataString(kv[0]);
+                var v = kv.Length > 1 ? Uri.UnescapeDataString(kv[1]) : "";
+                if (k == "tab" && v == "notepad") tab = "notepad";
+                else if (k == "gdrive" && v == "connected")
+                {
+                    tab = "notepad";
+                    Notify("Đã kết nối thành công với Google Drive! Bạn có thể bấm 'Đẩy toàn bộ VPS → Drive' hoặc quản lý file trực tiếp.");
+                }
+                else if (k == "gdrive_error" && !string.IsNullOrWhiteSpace(v))
+                {
+                    tab = "notepad";
+                    Notify("Lỗi kết nối Google Drive: " + v, true);
+                }
+            }
+        }
+        catch { }
     }
     private async Task Reload()
     {
@@ -486,6 +710,7 @@
             storageInfo=await Api.Get("/admin/storage");
             storyRows=Ui.Array(await Api.Get("/admin/stories"));
             allTextFileRows=Ui.Array(await Api.Get("/admin/texts"));
+            try { gdriveStatus = await Api.Get("/admin/gdrive/status"); gdriveRootFolderInput = Ui.Str(gdriveStatus, "rootFolderName") != "" ? Ui.Str(gdriveStatus, "rootFolderName") : "LangKinhHuKhong-BanThao"; } catch { }
             genreRows=Ui.Array(await Api.Get("/admin/genres"));
             reviewRows=Ui.Array(await Api.Get("/admin/reviews"));
             userRows=Ui.Array(await Api.Get("/admin/users"));
@@ -688,11 +913,243 @@
         {
             allTextFileRows = Ui.Array(await Api.Get("/admin/texts"));
             storyRows = Ui.Array(await Api.Get("/admin/stories"));
+            try { gdriveStatus = await Api.Get("/admin/gdrive/status"); } catch { }
             await InvokeAsync(StateHasChanged);
         }
         catch (Exception e)
         {
             Notify("Không tải được danh sách bản thảo: " + e.Message, true);
+        }
+    }
+    private async Task SaveGoogleDriveConfig()
+    {
+        if (busy) return;
+        busy = true;
+        try
+        {
+            gdriveStatus = await Api.Post("/admin/gdrive/config", new
+            {
+                clientId = gdriveClientIdInput,
+                clientSecret = gdriveClientSecretInput,
+                rootFolderName = gdriveRootFolderInput
+            });
+            gdriveClientSecretInput = "";
+            showGdriveConfig = false;
+            Notify("Đã lưu cấu hình OAuth 2.0 Client. Bấm 'Kết nối tài khoản Google Drive' để cấp quyền.");
+        }
+        catch (Exception e)
+        {
+            Notify("Lưu cấu hình Google Drive thất bại: " + e.Message, true);
+        }
+        finally
+        {
+            busy = false;
+            await InvokeAsync(StateHasChanged);
+        }
+    }
+    private async Task DisconnectGoogleDrive()
+    {
+        if (busy) return;
+        busy = true;
+        try
+        {
+            gdriveStatus = await Api.Post("/admin/gdrive/disconnect");
+            showDriveExplorer = false;
+            driveItems = [];
+            Notify("Đã ngắt kết nối tài khoản Google Drive.");
+        }
+        catch (Exception e)
+        {
+            Notify("Không ngắt kết nối được: " + e.Message, true);
+        }
+        finally
+        {
+            busy = false;
+            await InvokeAsync(StateHasChanged);
+        }
+    }
+    private async Task SyncPushToDrive()
+    {
+        if (busy || syncingDrive) return;
+        busy = true;
+        syncingDrive = true;
+        await InvokeAsync(StateHasChanged);
+        try
+        {
+            var res = await Api.Post("/admin/gdrive/sync-push");
+            var uploaded = Ui.Num(res, "uploaded");
+            var updated = Ui.Num(res, "updated");
+            var errors = Ui.Num(res, "errors");
+            allTextFileRows = Ui.Array(await Api.Get("/admin/texts"));
+            storyRows = Ui.Array(await Api.Get("/admin/stories"));
+            gdriveStatus = await Api.Get("/admin/gdrive/status");
+            if (activeStoryId != "") await LoadEpisodes(false);
+            if (showDriveExplorer) await BrowseDriveFolder(driveCurrentFolderId, driveCurrentFolderName);
+            Notify($"Đã đồng bộ VPS → Google Drive: tải mới {uploaded} file, cập nhật {updated} file" + (errors > 0 ? $" ({errors} lỗi)." : "."));
+        }
+        catch (Exception e)
+        {
+            Notify("Đồng bộ lên Google Drive thất bại: " + e.Message, true);
+        }
+        finally
+        {
+            busy = false;
+            syncingDrive = false;
+            await InvokeAsync(StateHasChanged);
+        }
+    }
+    private async Task SyncPullFromDrive()
+    {
+        if (busy || syncingDrive) return;
+        busy = true;
+        syncingDrive = true;
+        await InvokeAsync(StateHasChanged);
+        try
+        {
+            var res = await Api.Post("/admin/gdrive/sync-pull");
+            var imported = Ui.Num(res, "imported");
+            var updated = Ui.Num(res, "updated");
+            var errors = Ui.Num(res, "errors");
+            allTextFileRows = Ui.Array(await Api.Get("/admin/texts"));
+            storyRows = Ui.Array(await Api.Get("/admin/stories"));
+            gdriveStatus = await Api.Get("/admin/gdrive/status");
+            if (activeStoryId != "") await LoadEpisodes(false);
+            Notify($"Đã đồng bộ Google Drive → VPS: kéo mới {imported} file, cập nhật {updated} file" + (errors > 0 ? $" ({errors} lỗi)." : "."));
+        }
+        catch (Exception e)
+        {
+            Notify("Kéo file từ Google Drive thất bại: " + e.Message, true);
+        }
+        finally
+        {
+            busy = false;
+            syncingDrive = false;
+            await InvokeAsync(StateHasChanged);
+        }
+    }
+    private async Task ToggleDriveExplorer()
+    {
+        showDriveExplorer = !showDriveExplorer;
+        if (showDriveExplorer)
+        {
+            await BrowseDriveFolder("", "");
+        }
+    }
+    private async Task BrowseDriveFolder(string folderId, string folderName)
+    {
+        busy = true;
+        try
+        {
+            var url = "/admin/gdrive/files" + (string.IsNullOrWhiteSpace(folderId) ? "" : "?folderId=" + Uri.EscapeDataString(folderId));
+            var res = await Api.Get(url);
+            driveCurrentFolderId = Ui.Str(res, "folderId");
+            driveCurrentFolderName = string.IsNullOrWhiteSpace(folderName) ? Ui.Str(gdriveStatus, "rootFolderName") : folderName;
+            driveItems = Ui.Array(Ui.Property(res, "items"));
+            gdriveStatus = await Api.Get("/admin/gdrive/status");
+        }
+        catch (Exception e)
+        {
+            Notify("Không tải được danh sách file trên Google Drive: " + e.Message, true);
+        }
+        finally
+        {
+            busy = false;
+            await InvokeAsync(StateHasChanged);
+        }
+    }
+    private async Task CreateDriveSubfolder()
+    {
+        if (busy || string.IsNullOrWhiteSpace(driveNewFolderName))
+        {
+            if (string.IsNullOrWhiteSpace(driveNewFolderName)) Notify("Hãy nhập tên thư mục muốn tạo trên Google Drive.", true);
+            return;
+        }
+        busy = true;
+        try
+        {
+            await Api.Post("/admin/gdrive/folders", new { parentFolderId = driveCurrentFolderId, name = driveNewFolderName.Trim() });
+            var createdName = driveNewFolderName.Trim();
+            driveNewFolderName = "";
+            await BrowseDriveFolder(driveCurrentFolderId, driveCurrentFolderName);
+            Notify($"Đã tạo thư mục '{createdName}' trực tiếp trên Google Drive.");
+        }
+        catch (Exception e)
+        {
+            Notify("Tạo thư mục trên Google Drive thất bại: " + e.Message, true);
+        }
+        finally
+        {
+            busy = false;
+            await InvokeAsync(StateHasChanged);
+        }
+    }
+    private async Task StartNewDriveDirectNotepad()
+    {
+        if (busy) return;
+        tab = "notepad";
+        notepadDriveOnlyMode = true;
+        notepadDriveFileId = "";
+        notepadFileId = "";
+        notepadTitle = "";
+        notepadExtension = ".txt";
+        notepadFileName = "drive-note-" + DateTimeOffset.Now.ToString("yyyyMMdd-HHmm") + ".txt";
+        notepadSizeBytes = 0;
+        notepadUpdatedAt = "";
+        notepadOpen = true;
+        await InvokeAsync(StateHasChanged);
+        try { await Api.InitNewNotepadFile(""); } catch { }
+    }
+    private async Task OpenDriveFileInNotepad(string driveFileId)
+    {
+        if (string.IsNullOrWhiteSpace(driveFileId) || busy) return;
+        busy = true;
+        tab = "notepad";
+        notepadDriveOnlyMode = true;
+        notepadOpen = true;
+        await InvokeAsync(StateHasChanged);
+        try
+        {
+            var meta = await Api.OpenDriveNotepadFile(driveFileId);
+            notepadDriveFileId = Ui.Str(meta, "id");
+            notepadFileId = "";
+            notepadFileName = Ui.Str(meta, "name");
+            var ext = System.IO.Path.GetExtension(notepadFileName).ToLowerInvariant();
+            notepadExtension = ext == ".md" ? ".md" : ".txt";
+            notepadSizeBytes = Ui.Num(meta, "sizeBytes");
+            notepadUpdatedAt = Ui.Str(meta, "modifiedTime");
+        }
+        catch (Exception e)
+        {
+            Notify("Không mở được file từ Google Drive: " + e.Message, true);
+        }
+        finally
+        {
+            busy = false;
+            await InvokeAsync(StateHasChanged);
+        }
+    }
+    private async Task DeleteDriveItemDirect(JsonElement item)
+    {
+        var dId = Ui.Str(item, "id");
+        var dName = Ui.Str(item, "name");
+        if (string.IsNullOrWhiteSpace(dId) || busy) return;
+        busy = true;
+        try
+        {
+            await Api.Delete("/admin/gdrive/files/" + Uri.EscapeDataString(dId));
+            if (notepadDriveFileId == dId) CloseNotepad();
+            await BrowseDriveFolder(driveCurrentFolderId, driveCurrentFolderName);
+            allTextFileRows = Ui.Array(await Api.Get("/admin/texts"));
+            Notify($"Đã xóa '{dName}' trực tiếp khỏi Google Drive.");
+        }
+        catch (Exception e)
+        {
+            Notify("Xóa trên Google Drive thất bại: " + e.Message, true);
+        }
+        finally
+        {
+            busy = false;
+            await InvokeAsync(StateHasChanged);
         }
     }
     private async Task UploadFromNotepadTab()
@@ -715,7 +1172,7 @@
             allTextFileRows = Ui.Array(await Api.Get("/admin/texts"));
             storyRows = Ui.Array(await Api.Get("/admin/stories"));
             if (activeStoryId == targetStory) await LoadEpisodes(false);
-            Notify($"Đã lưu thành công {count} file chữ (.md/.txt) lên VPS.");
+            Notify($"Đã lưu thành công {count} file chữ (.md/.txt) lên VPS" + (Ui.Bool(gdriveStatus, "connected") ? " & đồng bộ lên Google Drive." : "."));
         }
         catch (Exception e)
         {
@@ -732,6 +1189,8 @@
     {
         if (busy) return;
         tab = "notepad";
+        notepadDriveOnlyMode = false;
+        notepadDriveFileId = "";
         notepadFileId = "";
         notepadStoryId = !string.IsNullOrWhiteSpace(preferredStoryId)
             ? preferredStoryId
@@ -750,6 +1209,8 @@
         if (string.IsNullOrWhiteSpace(textId) || busy) return;
         busy = true;
         tab = "notepad";
+        notepadDriveOnlyMode = false;
+        notepadDriveFileId = "";
         notepadOpen = true;
         await InvokeAsync(StateHasChanged);
         try
@@ -777,6 +1238,37 @@
     private async Task SaveNotepadFile()
     {
         if (busy || savingNotepad) return;
+        if (notepadDriveOnlyMode)
+        {
+            busy = true;
+            savingNotepad = true;
+            await InvokeAsync(StateHasChanged);
+            try
+            {
+                var fname = string.IsNullOrWhiteSpace(notepadFileName) ? "ban-thao" + notepadExtension : notepadFileName.Trim();
+                if (!fname.EndsWith(".txt", StringComparison.OrdinalIgnoreCase) && !fname.EndsWith(".md", StringComparison.OrdinalIgnoreCase))
+                    fname += notepadExtension;
+                var savedDrive = await Api.SaveDriveNotepadFile(notepadDriveFileId, driveCurrentFolderId, fname, notepadTitle);
+                notepadDriveFileId = Ui.Str(savedDrive, "id");
+                notepadFileName = Ui.Str(savedDrive, "name");
+                notepadSizeBytes = Ui.Num(savedDrive, "sizeBytes");
+                notepadUpdatedAt = Ui.Str(savedDrive, "modifiedTime");
+                if (showDriveExplorer) await BrowseDriveFolder(driveCurrentFolderId, driveCurrentFolderName);
+                allTextFileRows = Ui.Array(await Api.Get("/admin/texts"));
+                Notify($"Đã lưu file '{notepadFileName}' trực tiếp lên Google Drive.");
+            }
+            catch (Exception e)
+            {
+                Notify("Lưu file lên Google Drive thất bại: " + e.Message, true);
+            }
+            finally
+            {
+                busy = false;
+                savingNotepad = false;
+                await InvokeAsync(StateHasChanged);
+            }
+            return;
+        }
         if (string.IsNullOrWhiteSpace(notepadStoryId))
         {
             Notify("Hãy chọn bộ truyện cho file chữ.", true);
@@ -800,9 +1292,10 @@
             allTextFileRows = Ui.Array(await Api.Get("/admin/texts"));
             storyRows = Ui.Array(await Api.Get("/admin/stories"));
             if (activeStoryId != "") await LoadEpisodes(false);
+            var hasDrive = Ui.Str(saved, "drive_file_id") != "";
             Notify(isNew
-                ? $"Đã tạo mới và lưu file '{notepadFileName}' ({Ui.FileSize(notepadSizeBytes)}) lên VPS."
-                : $"Đã cập nhật nội dung file '{notepadFileName}' ({Ui.FileSize(notepadSizeBytes)}) trên VPS.");
+                ? $"Đã tạo mới và lưu file '{notepadFileName}' ({Ui.FileSize(notepadSizeBytes)}) lên VPS{(hasDrive ? " & Google Drive" : "")}."
+                : $"Đã cập nhật nội dung file '{notepadFileName}' ({Ui.FileSize(notepadSizeBytes)}) trên VPS{(hasDrive ? " & Google Drive" : "")}.");
         }
         catch (Exception e)
         {
@@ -831,6 +1324,8 @@
     {
         notepadOpen = false;
         notepadFileId = "";
+        notepadDriveFileId = "";
+        notepadDriveOnlyMode = false;
     }
     private void AskDeleteNotepadFile(JsonElement tf)
     {
@@ -853,7 +1348,7 @@
             allTextFileRows = Ui.Array(await Api.Get("/admin/texts"));
             storyRows = Ui.Array(await Api.Get("/admin/stories"));
             if (activeStoryId != "") await LoadEpisodes(false);
-            Notify($"Đã xóa vĩnh viễn file '{targetName}' khỏi VPS.");
+            Notify($"Đã xóa vĩnh viễn file '{targetName}' khỏi VPS" + (Ui.Bool(gdriveStatus, "connected") ? " & Google Drive." : "."));
         }
         catch (Exception e)
         {

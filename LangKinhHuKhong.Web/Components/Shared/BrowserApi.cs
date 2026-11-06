@@ -9,7 +9,7 @@ namespace LangKinhHuKhong.Components.Shared;
 public sealed class BrowserApi(IJSRuntime js) : IAsyncDisposable
 {
     private Task<IJSObjectReference>? moduleTask;
-    private const string ModulePath = "/js/lkh-interop.js?v=1.9.5.0";
+    private const string ModulePath = "/js/lkh-interop.js?v=1.9.5.1";
 
     private async Task<IJSObjectReference> ModuleAsync()
     {
@@ -51,6 +51,9 @@ public sealed class BrowserApi(IJSRuntime js) : IAsyncDisposable
     public ValueTask<JsonElement> SaveNotepadFile(string textId, string storyId, string title, string fileName, string extension)
         => CallJsonWithTimeout("saveNotepadFile", LongUploadTimeout, textId, storyId, title, fileName, extension);
     public ValueTask<JsonElement> CopyNotepadContent() => CallJson("copyNotepadContent");
+    public ValueTask<JsonElement> OpenDriveNotepadFile(string driveFileId) => CallJsonWithTimeout("openDriveNotepadFile", LongUploadTimeout, driveFileId);
+    public ValueTask<JsonElement> SaveDriveNotepadFile(string driveFileId, string parentFolderId, string fileName, string title)
+        => CallJsonWithTimeout("saveDriveNotepadFile", LongUploadTimeout, driveFileId, parentFolderId, fileName, title);
     public ValueTask Listen(string episodeId) => CallVoid("listen", episodeId);
     public ValueTask StopAudio() => CallVoid("stopAudio");
     public ValueTask BindAutoNext(object? receiver) => CallVoid("bindAutoNext", receiver);

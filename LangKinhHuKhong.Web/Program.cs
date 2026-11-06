@@ -48,6 +48,7 @@ builder.Services.AddMemoryCache();
 builder.Services.AddHttpClient("VietQrBanks", c => c.Timeout = TimeSpan.FromSeconds(8));
 builder.Services.AddSingleton<AudioStorage>();
 builder.Services.AddSingleton<StorageJanitor>();
+builder.Services.AddSingleton<GoogleDriveService>();
 builder.Services.AddRazorComponents().AddInteractiveServerComponents(o =>
 {
     o.DisconnectedCircuitRetentionPeriod = TimeSpan.FromMinutes(10);
@@ -136,7 +137,8 @@ app.Use(async (ctx, next) =>
              path.EndsWith("/audio", StringComparison.OrdinalIgnoreCase) ||
              path.EndsWith("/texts", StringComparison.OrdinalIgnoreCase) ||
              path.EndsWith("/texts/create", StringComparison.OrdinalIgnoreCase) ||
-             path.Contains("/admin/texts/", StringComparison.OrdinalIgnoreCase));
+             path.Contains("/admin/texts/", StringComparison.OrdinalIgnoreCase) ||
+             path.Contains("/admin/gdrive/", StringComparison.OrdinalIgnoreCase));
         if (!isAdminUpload && ctx.Request.ContentLength is > 256 * 1024)
         {
             ctx.Response.StatusCode = StatusCodes.Status413PayloadTooLarge;
@@ -825,21 +827,182 @@ admin.MapGet("/stories/{id}/episodes", async Task<IResult> (string id, Database 
 });
 
 // Story text files (.md, .txt) stored directly on VPS disk (DataRoot/story-texts/<storyId>/).
-// Full Admin-only CRUD + Online Notepad editor. Each story can have 0, 1, or many text files.
+// Full Admin-only CRUD + Online Notepad editor + Google Drive 2-way sync.
+static string ResolveGoogleCallbackUri(HttpContext ctx, string configuredPublicOrigin)
+{
+    var host = ctx.Request.Host.Value ?? "";
+    if (host.StartsWith("localhost", StringComparison.OrdinalIgnoreCase) ||
+        host.StartsWith("127.0.0.1", StringComparison.OrdinalIgnoreCase))
+    {
+        return $"{ctx.Request.Scheme}://{host}/api/admin/gdrive/callback";
+    }
+    return configuredPublicOrigin.TrimEnd('/') + "/api/admin/gdrive/callback";
+}
+
+app.MapGet("/api/admin/gdrive/callback", async Task<IResult> (
+    string? code, string? state, string? error, HttpContext ctx,
+    IMemoryCache cache, Database source, GoogleDriveService gdrive) =>
+{
+    if (!string.IsNullOrWhiteSpace(error))
+        return Results.Redirect("/quan-tri?gdrive_error=" + Uri.EscapeDataString(error));
+    if (string.IsNullOrWhiteSpace(code) || string.IsNullOrWhiteSpace(state))
+        return Results.Redirect("/quan-tri?gdrive_error=missing_code");
+
+    var cacheKey = "gdrive_oauth_state:" + state;
+    if (!cache.TryGetValue(cacheKey, out string? adminUserId) || string.IsNullOrWhiteSpace(adminUserId))
+        return Results.Redirect("/quan-tri?gdrive_error=expired_state");
+    cache.Remove(cacheKey);
+
+    await using var db = await source.OpenAsync();
+    var adminUser = await db.FirstAsync("SELECT id,role,status FROM users WHERE id=@id", ("@id", adminUserId));
+    if (adminUser is null || adminUser.S("role") != "Admin" || adminUser.S("status") != "Active")
+        return Results.Unauthorized();
+
+    try
+    {
+        var redirectUri = ResolveGoogleCallbackUri(ctx, publicOrigin);
+        await gdrive.ExchangeCodeAsync(code, redirectUri, ctx.RequestAborted);
+        await Helpers.Audit(db, adminUserId, "gdrive.connect", adminUserId, "Connected Google Drive OAuth2");
+        return Results.Redirect("/quan-tri?gdrive=connected");
+    }
+    catch (Exception ex)
+    {
+        ctx.RequestServices.GetRequiredService<ILoggerFactory>().CreateLogger("GoogleDrive").LogError(ex, "OAuth callback failed");
+        return Results.Redirect("/quan-tri?gdrive_error=" + Uri.EscapeDataString(ex.Message));
+    }
+});
+
+admin.MapGet("/gdrive/status", (GoogleDriveService gdrive) => Results.Ok(gdrive.GetStatus()));
+
+admin.MapPost("/gdrive/config", async Task<IResult> (GDriveConfigReq req, HttpContext ctx, Database source, GoogleDriveService gdrive) =>
+{
+    await gdrive.SaveCredentialsConfigAsync(req.ClientId, req.ClientSecret, req.RootFolderId, req.RootFolderName);
+    await using var db = await source.OpenAsync();
+    await Helpers.Audit(db, Helpers.UserId(ctx.User), "gdrive.config", "", $"rootFolder={req.RootFolderName}");
+    return Results.Ok(gdrive.GetStatus());
+});
+
+admin.MapPost("/gdrive/disconnect", async Task<IResult> (HttpContext ctx, Database source, GoogleDriveService gdrive) =>
+{
+    await gdrive.DisconnectAsync();
+    await using var db = await source.OpenAsync();
+    await Helpers.Audit(db, Helpers.UserId(ctx.User), "gdrive.disconnect", "", "Disconnected Google Drive");
+    return Results.Ok(gdrive.GetStatus());
+});
+
+admin.MapGet("/gdrive/connect", (HttpContext ctx, IMemoryCache cache, GoogleDriveService gdrive) =>
+{
+    var state = Helpers.Id() + Helpers.Id();
+    cache.Set("gdrive_oauth_state:" + state, Helpers.UserId(ctx.User), TimeSpan.FromMinutes(15));
+    var redirectUri = ResolveGoogleCallbackUri(ctx, publicOrigin);
+    var url = gdrive.BuildAuthorizeUrl(redirectUri, state);
+    return Results.Redirect(url);
+});
+
+admin.MapPost("/gdrive/sync-push", async Task<IResult> (HttpContext ctx, Database source, GoogleDriveService gdrive) =>
+{
+    if (!gdrive.IsConnected) return Bad("Chưa kết nối tài khoản Google Drive.");
+    try
+    {
+        var (uploaded, storiesSynced) = await gdrive.SyncPushAllToDriveAsync(ctx.RequestAborted);
+        await using var db = await source.OpenAsync();
+        await Helpers.Audit(db, Helpers.UserId(ctx.User), "gdrive.sync_push", "", $"uploaded={uploaded}; stories={storiesSynced}");
+        return Results.Ok(new { uploaded, storiesSynced, message = $"Đã đồng bộ {uploaded} file chữ của {storiesSynced} bộ truyện từ VPS lên Google Drive." });
+    }
+    catch (Exception ex)
+    {
+        return Bad("Đồng bộ lên Google Drive thất bại: " + ex.Message);
+    }
+});
+
+admin.MapPost("/gdrive/sync-pull", async Task<IResult> (HttpContext ctx, Database source, GoogleDriveService gdrive) =>
+{
+    if (!gdrive.IsConnected) return Bad("Chưa kết nối tài khoản Google Drive.");
+    try
+    {
+        var (imported, updated) = await gdrive.SyncPullFromDriveAsync(ctx.RequestAborted);
+        await using var db = await source.OpenAsync();
+        await Helpers.Audit(db, Helpers.UserId(ctx.User), "gdrive.sync_pull", "", $"imported={imported}; updated={updated}");
+        return Results.Ok(new { imported, updated, message = $"Đã kéo từ Google Drive về VPS: thêm mới {imported} file, cập nhật {updated} file." });
+    }
+    catch (Exception ex)
+    {
+        return Bad("Đồng bộ từ Google Drive về VPS thất bại: " + ex.Message);
+    }
+});
+
+admin.MapGet("/gdrive/files", async Task<IResult> (string? folderId, HttpContext ctx, GoogleDriveService gdrive) =>
+{
+    if (!gdrive.IsConnected) return Bad("Chưa kết nối tài khoản Google Drive.");
+    try { return Results.Ok(await gdrive.ListFolderItemsAsync(folderId, ctx.RequestAborted)); }
+    catch (Exception ex) { return Bad(ex.Message); }
+});
+
+admin.MapPost("/gdrive/folders", async Task<IResult> (GDriveFolderCreateReq req, HttpContext ctx, GoogleDriveService gdrive) =>
+{
+    if (!gdrive.IsConnected) return Bad("Chưa kết nối tài khoản Google Drive.");
+    if (string.IsNullOrWhiteSpace(req.Name) || req.Name.Trim().Length > 150) return Bad("Tên thư mục không hợp lệ.");
+    try
+    {
+        var id = await gdrive.CreateSubfolderOnDriveAsync(req.ParentFolderId, req.Name, ctx.RequestAborted);
+        return Results.Ok(new { id, name = req.Name.Trim() });
+    }
+    catch (Exception ex) { return Bad(ex.Message); }
+});
+
+admin.MapGet("/gdrive/files/{driveFileId}/content", async Task<IResult> (string driveFileId, HttpContext ctx, GoogleDriveService gdrive) =>
+{
+    if (!gdrive.IsConnected) return Bad("Chưa kết nối tài khoản Google Drive.");
+    try
+    {
+        var (id, name, desc, size, mod, link, content) = await gdrive.ReadDriveFileTextAsync(driveFileId, ctx.RequestAborted);
+        return Results.Ok(new { id, fileName = name, title = desc, sizeBytes = size, updatedAt = mod, webViewLink = link, content });
+    }
+    catch (Exception ex) { return Bad(ex.Message); }
+});
+
+admin.MapPost("/gdrive/files/save", async Task<IResult> (GDriveFileSaveReq req, HttpContext ctx, Database source, GoogleDriveService gdrive) =>
+{
+    if (!gdrive.IsConnected) return Bad("Chưa kết nối tài khoản Google Drive.");
+    try
+    {
+        var (id, name, size) = await gdrive.SaveDriveFileDirectAsync(
+            req.DriveFileId, req.ParentFolderId, req.FileName, req.Title, req.Content, ctx.RequestAborted);
+        await using var db = await source.OpenAsync();
+        await Helpers.Audit(db, Helpers.UserId(ctx.User), "gdrive.file_save", id, $"name={name}; size={size}");
+        return Results.Ok(new { id, fileName = name, sizeBytes = size, updatedAt = Helpers.Now() });
+    }
+    catch (Exception ex) { return Bad(ex.Message); }
+});
+
+admin.MapDelete("/gdrive/files/{driveFileId}", async Task<IResult> (string driveFileId, HttpContext ctx, Database source, GoogleDriveService gdrive) =>
+{
+    if (!gdrive.IsConnected) return Bad("Chưa kết nối tài khoản Google Drive.");
+    try
+    {
+        await gdrive.DeleteDriveItemAsync(driveFileId, ctx.RequestAborted);
+        await using var db = await source.OpenAsync();
+        await db.ExecAsync("UPDATE story_text_files SET drive_file_id='' WHERE drive_file_id=@did", ("@did", driveFileId));
+        await Helpers.Audit(db, Helpers.UserId(ctx.User), "gdrive.file_delete", driveFileId, "Moved Drive file to Trash");
+        return Results.Ok(new { message = "Đã chuyển file/thư mục trên Google Drive vào Thùng rác." });
+    }
+    catch (Exception ex) { return Bad(ex.Message); }
+});
+
 admin.MapGet("/texts", async Task<IResult> (string? storyId, Database source) =>
 {
     await using var db = await source.OpenAsync();
     if (!string.IsNullOrWhiteSpace(storyId))
     {
         if (!Regex.IsMatch(storyId, "^[a-f0-9]{32}$")) return Results.NotFound();
-        return Results.Ok(await db.ListAsync(@"SELECT tf.id,tf.story_id,tf.title,tf.file_name,tf.extension,tf.size_bytes,tf.created_at,
+        return Results.Ok(await db.ListAsync(@"SELECT tf.id,tf.story_id,tf.title,tf.file_name,tf.extension,tf.size_bytes,tf.drive_file_id,tf.created_at,
             CASE WHEN tf.updated_at<>'' THEN tf.updated_at ELSE tf.created_at END AS updated_at,
             s.title AS story_title, s.slug AS story_slug
             FROM story_text_files tf JOIN stories s ON s.id=tf.story_id
             WHERE tf.story_id=@sid
             ORDER BY COALESCE(NULLIF(tf.updated_at,''), tf.created_at) DESC, tf.file_name ASC", ("@sid", storyId)));
     }
-    return Results.Ok(await db.ListAsync(@"SELECT tf.id,tf.story_id,tf.title,tf.file_name,tf.extension,tf.size_bytes,tf.created_at,
+    return Results.Ok(await db.ListAsync(@"SELECT tf.id,tf.story_id,tf.title,tf.file_name,tf.extension,tf.size_bytes,tf.drive_file_id,tf.created_at,
         CASE WHEN tf.updated_at<>'' THEN tf.updated_at ELSE tf.created_at END AS updated_at,
         s.title AS story_title, s.slug AS story_slug
         FROM story_text_files tf JOIN stories s ON s.id=tf.story_id
@@ -850,14 +1013,14 @@ admin.MapGet("/stories/{id}/texts", async Task<IResult> (string id, Database sou
 {
     if (!Regex.IsMatch(id, "^[a-f0-9]{32}$")) return Results.NotFound();
     await using var db = await source.OpenAsync();
-    return Results.Ok(await db.ListAsync(@"SELECT tf.id,tf.story_id,tf.title,tf.file_name,tf.extension,tf.size_bytes,tf.created_at,
+    return Results.Ok(await db.ListAsync(@"SELECT tf.id,tf.story_id,tf.title,tf.file_name,tf.extension,tf.size_bytes,tf.drive_file_id,tf.created_at,
         CASE WHEN tf.updated_at<>'' THEN tf.updated_at ELSE tf.created_at END AS updated_at,
         s.title AS story_title
         FROM story_text_files tf JOIN stories s ON s.id=tf.story_id
         WHERE tf.story_id=@id ORDER BY COALESCE(NULLIF(tf.updated_at,''), tf.created_at) DESC, tf.file_name ASC", ("@id", id)));
 });
 
-admin.MapPost("/stories/{id}/texts/create", async Task<IResult> (string id, TextCreateReq req, HttpContext ctx, Database source) =>
+admin.MapPost("/stories/{id}/texts/create", async Task<IResult> (string id, TextCreateReq req, HttpContext ctx, Database source, GoogleDriveService gdrive) =>
 {
     if (!Regex.IsMatch(id, "^[a-f0-9]{32}$")) return Results.NotFound();
     var ext = (req.Extension ?? ".txt").Trim().ToLowerInvariant();
@@ -887,17 +1050,32 @@ admin.MapPost("/stories/{id}/texts/create", async Task<IResult> (string id, Text
     var storedName = textId + ext;
     var destPath = Path.Combine(storyDir, storedName);
     var utf8NoBom = new System.Text.UTF8Encoding(false);
-    await File.WriteAllTextAsync(destPath, body, utf8NoBom, ctx.RequestAborted);
+    var bytes = utf8NoBom.GetBytes(body);
+    await File.WriteAllBytesAsync(destPath, bytes, ctx.RequestAborted);
     var actualSize = new FileInfo(destPath).Length;
     var now = Helpers.Now();
 
-    await db.ExecAsync(@"INSERT INTO story_text_files(id,story_id,title,file_name,stored_name,extension,size_bytes,created_at,updated_at)
-        VALUES(@id,@sid,@title,@fname,@sname,@ext,@size,@now,@now)",
+    var driveFileId = "";
+    if (gdrive.IsConnected)
+    {
+        try
+        {
+            var folderId = await gdrive.EnsureStoryFolderAsync(db, id, ctx.RequestAborted);
+            driveFileId = await gdrive.UpsertTextFileOnDriveAsync(folderId, "", rawName, rawTitle, bytes, ext, ctx.RequestAborted);
+        }
+        catch (Exception ex)
+        {
+            ctx.RequestServices.GetRequiredService<ILoggerFactory>().CreateLogger("GoogleDrive").LogWarning(ex, "Auto-sync new text file to Drive failed");
+        }
+    }
+
+    await db.ExecAsync(@"INSERT INTO story_text_files(id,story_id,title,file_name,stored_name,extension,size_bytes,drive_file_id,created_at,updated_at)
+        VALUES(@id,@sid,@title,@fname,@sname,@ext,@size,@did,@now,@now)",
         ("@id", textId), ("@sid", id), ("@title", rawTitle), ("@fname", rawName),
-        ("@sname", storedName), ("@ext", ext), ("@size", actualSize), ("@now", now));
+        ("@sname", storedName), ("@ext", ext), ("@size", actualSize), ("@did", driveFileId), ("@now", now));
 
     await Helpers.Audit(db, Helpers.UserId(ctx.User), "story.text_create", id,
-        $"textId={textId}; file={rawName}; size={actualSize}");
+        $"textId={textId}; file={rawName}; size={actualSize}; drive={driveFileId != ""}");
     return Results.Ok(new
     {
         id = textId,
@@ -906,12 +1084,13 @@ admin.MapPost("/stories/{id}/texts/create", async Task<IResult> (string id, Text
         file_name = rawName,
         extension = ext,
         size_bytes = actualSize,
+        drive_file_id = driveFileId,
         created_at = now,
         updated_at = now
     });
 });
 
-admin.MapPost("/stories/{id}/texts", async Task<IResult> (string id, HttpRequest request, HttpContext ctx, Database source) =>
+admin.MapPost("/stories/{id}/texts", async Task<IResult> (string id, HttpRequest request, HttpContext ctx, Database source, GoogleDriveService gdrive) =>
 {
     if (!Regex.IsMatch(id, "^[a-f0-9]{32}$")) return Results.NotFound();
     if (!request.HasFormContentType) return Bad("Yêu cầu multipart/form-data.");
@@ -941,6 +1120,13 @@ admin.MapPost("/stories/{id}/texts", async Task<IResult> (string id, HttpRequest
     var writtenFiles = new List<string>();
     try
     {
+        string driveFolderId = "";
+        if (gdrive.IsConnected)
+        {
+            try { driveFolderId = await gdrive.EnsureStoryFolderAsync(db, id, ctx.RequestAborted); }
+            catch { driveFolderId = ""; }
+        }
+
         foreach (var f in form.Files)
         {
             var ext = Path.GetExtension(f.FileName).ToLowerInvariant();
@@ -971,10 +1157,21 @@ admin.MapPost("/stories/{id}/texts", async Task<IResult> (string id, HttpRequest
             var now = Helpers.Now();
             var actualSize = new FileInfo(destPath).Length;
 
-            await db.ExecAsync(@"INSERT INTO story_text_files(id,story_id,title,file_name,stored_name,extension,size_bytes,created_at,updated_at)
-                VALUES(@id,@sid,@title,@fname,@sname,@ext,@size,@now,@now)",
+            var driveFileId = "";
+            if (!string.IsNullOrWhiteSpace(driveFolderId))
+            {
+                try
+                {
+                    var fileBytes = await File.ReadAllBytesAsync(destPath, ctx.RequestAborted);
+                    driveFileId = await gdrive.UpsertTextFileOnDriveAsync(driveFolderId, "", rawName, itemTitle, fileBytes, ext, ctx.RequestAborted);
+                }
+                catch { driveFileId = ""; }
+            }
+
+            await db.ExecAsync(@"INSERT INTO story_text_files(id,story_id,title,file_name,stored_name,extension,size_bytes,drive_file_id,created_at,updated_at)
+                VALUES(@id,@sid,@title,@fname,@sname,@ext,@size,@did,@now,@now)",
                 ("@id", textId), ("@sid", id), ("@title", itemTitle), ("@fname", rawName),
-                ("@sname", storedName), ("@ext", ext), ("@size", actualSize), ("@now", now));
+                ("@sname", storedName), ("@ext", ext), ("@size", actualSize), ("@did", driveFileId), ("@now", now));
 
             createdItems.Add(new
             {
@@ -984,6 +1181,7 @@ admin.MapPost("/stories/{id}/texts", async Task<IResult> (string id, HttpRequest
                 file_name = rawName,
                 extension = ext,
                 size_bytes = actualSize,
+                drive_file_id = driveFileId,
                 created_at = now,
                 updated_at = now
             });
@@ -1038,6 +1236,7 @@ admin.MapGet("/texts/{textId}/content", async Task<IResult> (string textId, Http
         fileName = row.S("file_name"),
         extension = row.S("extension"),
         sizeBytes = row.N("size_bytes"),
+        driveFileId = row.S("drive_file_id"),
         createdAt = row.S("created_at"),
         updatedAt = row.S("updated_at") != "" ? row.S("updated_at") : row.S("created_at"),
         truncated = info.Length > maxEditBytes,
@@ -1045,7 +1244,7 @@ admin.MapGet("/texts/{textId}/content", async Task<IResult> (string textId, Http
     });
 });
 
-admin.MapPut("/texts/{textId}", async Task<IResult> (string textId, TextUpdateReq req, HttpContext ctx, Database source) =>
+admin.MapPut("/texts/{textId}", async Task<IResult> (string textId, TextUpdateReq req, HttpContext ctx, Database source, GoogleDriveService gdrive) =>
 {
     if (!Regex.IsMatch(textId, "^[a-f0-9]{32}$")) return Results.NotFound();
     await using var db = await source.OpenAsync();
@@ -1082,32 +1281,48 @@ admin.MapPut("/texts/{textId}", async Task<IResult> (string textId, TextUpdateRe
     var tempPath = newPath + ".tmp-" + Guid.NewGuid().ToString("N")[..8];
 
     var utf8NoBom = new System.Text.UTF8Encoding(false);
-    await File.WriteAllTextAsync(tempPath, body, utf8NoBom, ctx.RequestAborted);
+    var bytes = utf8NoBom.GetBytes(body);
+    await File.WriteAllBytesAsync(tempPath, bytes, ctx.RequestAborted);
     File.Move(tempPath, newPath, overwrite: true);
     if (!string.Equals(oldPath, newPath, StringComparison.Ordinal) && File.Exists(oldPath))
     {
         try { File.Delete(oldPath); } catch { }
     }
 
+    var driveFileId = old.S("drive_file_id");
+    if (gdrive.IsConnected)
+    {
+        try
+        {
+            var folderId = await gdrive.EnsureStoryFolderAsync(db, targetStoryId, ctx.RequestAborted);
+            driveFileId = await gdrive.UpsertTextFileOnDriveAsync(folderId, driveFileId, rawName, rawTitle, bytes, ext, ctx.RequestAborted);
+        }
+        catch (Exception ex)
+        {
+            ctx.RequestServices.GetRequiredService<ILoggerFactory>().CreateLogger("GoogleDrive").LogWarning(ex, "Auto-sync updated text file to Drive failed");
+        }
+    }
+
     var actualSize = new FileInfo(newPath).Length;
     var now = Helpers.Now();
     await db.ExecAsync(@"UPDATE story_text_files
-        SET story_id=@sid, title=@title, file_name=@fname, stored_name=@sname, extension=@ext, size_bytes=@size, updated_at=@now
+        SET story_id=@sid, title=@title, file_name=@fname, stored_name=@sname, extension=@ext, size_bytes=@size, drive_file_id=@did, updated_at=@now
         WHERE id=@id",
         ("@sid", targetStoryId), ("@title", rawTitle), ("@fname", rawName),
-        ("@sname", newStoredName), ("@ext", ext), ("@size", actualSize), ("@now", now), ("@id", textId));
+        ("@sname", newStoredName), ("@ext", ext), ("@size", actualSize), ("@did", driveFileId), ("@now", now), ("@id", textId));
 
     await Helpers.Audit(db, Helpers.UserId(ctx.User), "story.text_update", targetStoryId,
-        $"textId={textId}; file={rawName}; size={actualSize}");
+        $"textId={textId}; file={rawName}; size={actualSize}; drive={driveFileId != ""}");
     return Results.Ok(new
     {
-        message = "Đã lưu nội dung file chữ lên VPS.",
+        message = "Đã lưu nội dung file chữ lên VPS" + (driveFileId != "" ? " và đồng bộ Google Drive." : "."),
         id = textId,
         storyId = targetStoryId,
         title = rawTitle,
         fileName = rawName,
         extension = ext,
         sizeBytes = actualSize,
+        driveFileId,
         updatedAt = now
     });
 });
@@ -1124,7 +1339,7 @@ admin.MapGet("/texts/{textId}/download", async Task<IResult> (string textId, Dat
     return Results.File(path, contentType, fileDownloadName: row.S("file_name"));
 });
 
-admin.MapDelete("/texts/{textId}", async Task<IResult> (string textId, HttpContext ctx, Database source) =>
+admin.MapDelete("/texts/{textId}", async Task<IResult> (string textId, HttpContext ctx, Database source, GoogleDriveService gdrive) =>
 {
     if (!Regex.IsMatch(textId, "^[a-f0-9]{32}$")) return Results.NotFound();
     await using var db = await source.OpenAsync();
@@ -1136,9 +1351,14 @@ admin.MapDelete("/texts/{textId}", async Task<IResult> (string textId, HttpConte
     {
         try { File.Delete(path); } catch { }
     }
+    var driveId = row.S("drive_file_id");
+    if (!string.IsNullOrWhiteSpace(driveId) && gdrive.IsConnected)
+    {
+        try { await gdrive.DeleteDriveItemAsync(driveId, ctx.RequestAborted); } catch { }
+    }
     await Helpers.Audit(db, Helpers.UserId(ctx.User), "story.text_delete", row.S("story_id"),
         $"textId={textId}; file={row.S("file_name")}");
-    return Results.Ok(new { message = "Đã xóa file chữ khỏi VPS." });
+    return Results.Ok(new { message = "Đã xóa file chữ khỏi VPS" + (!string.IsNullOrWhiteSpace(driveId) ? " và Google Drive." : ".") });
 });
 
 // Track long-running 30+ minute MP3 transcoding & Cloudflare R2 uploads so retries
@@ -1943,3 +2163,6 @@ public record BankAccountReq(string Label,string BankBin,string BankName,string 
 public record BankActivationReq(bool IsActive);
 public record TextCreateReq(string Title, string FileName, string Extension, string Content);
 public record TextUpdateReq(string StoryId, string Title, string FileName, string Extension, string Content);
+public record GDriveConfigReq(string? ClientId, string? ClientSecret, string? RootFolderId, string? RootFolderName);
+public record GDriveFolderCreateReq(string? ParentFolderId, string Name);
+public record GDriveFileSaveReq(string? DriveFileId, string? ParentFolderId, string FileName, string Title, string Content);

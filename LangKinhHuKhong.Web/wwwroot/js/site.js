@@ -168,6 +168,33 @@ window.lkh = (() => {
     await navigator.clipboard.writeText(editor.value || '');
     return { ok: true };
   }
+  async function openDriveNotepadFile(driveFileId) {
+    const data = await send(`/admin/gdrive/files/${encodeURIComponent(driveFileId)}/content`, 'GET');
+    const editor = await waitForNotepadEditor();
+    if (editor) {
+      editor.value = data.content || '';
+      updateNotepadStats(editor);
+    }
+    return {
+      id: data.id || '',
+      fileName: data.fileName || '',
+      title: data.title || '',
+      sizeBytes: data.sizeBytes || 0,
+      updatedAt: data.updatedAt || '',
+      webViewLink: data.webViewLink || ''
+    };
+  }
+  async function saveDriveNotepadFile(driveFileId, parentFolderId, fileName, title) {
+    const editor = bindNotepadEditor();
+    const content = editor ? editor.value : '';
+    return await send('/admin/gdrive/files/save', 'POST', {
+      driveFileId: driveFileId || '',
+      parentFolderId: parentFolderId || '',
+      fileName: fileName || '',
+      title: title || '',
+      content
+    });
+  }
   // Free -> direct 5-minute MP3 preview. Premium/Admin -> encrypted HLS only.
   // A browser cannot call the full MP3 route; the HLS playlist/segments/key are gated by server.
   let activeHls = null;
@@ -392,6 +419,7 @@ window.lkh = (() => {
   return {
     api: send, uploadEpisode, uploadCover, uploadStoryTexts,
     openNotepadFile, initNewNotepadFile, saveNotepadFile, copyNotepadContent,
+    openDriveNotepadFile, saveDriveNotepadFile,
     replaceEpisodeAudio, listen, stopAudio, bindAutoNext
   };
 })();

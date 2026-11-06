@@ -108,6 +108,9 @@ R2-Local.ps1
 *credentials*.json
 *credentials*.ini
 *service-account*.json
+*client_secret*.json
+gdrive-*.json
+**/gdrive-*.json
 **/appsettings.json
 **/appsettings.*.json
 !**/appsettings.example.json

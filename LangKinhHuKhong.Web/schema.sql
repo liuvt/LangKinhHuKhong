@@ -21,6 +21,7 @@ CREATE TABLE IF NOT EXISTS stories (
  cover_url TEXT NOT NULL DEFAULT '',
  cover_file TEXT NOT NULL DEFAULT '',
  storage_prefix TEXT NOT NULL DEFAULT '',
+ drive_folder_id TEXT NOT NULL DEFAULT '',
  status TEXT NOT NULL DEFAULT 'Draft' CHECK(status IN ('Draft','Published','Hidden')),
  created_at TEXT NOT NULL,
  updated_at TEXT NOT NULL
@@ -197,6 +198,7 @@ CREATE TABLE IF NOT EXISTS story_text_files (
  stored_name TEXT NOT NULL,
  extension TEXT NOT NULL CHECK(extension IN ('.md','.txt')),
  size_bytes INTEGER NOT NULL DEFAULT 0,
+ drive_file_id TEXT NOT NULL DEFAULT '',
  created_at TEXT NOT NULL,
  updated_at TEXT NOT NULL DEFAULT ''
 );

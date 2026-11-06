@@ -61,6 +61,10 @@ public sealed class Database(IWebHostEnvironment environment)
             await db.ExecAsync("ALTER TABLE story_text_files ADD COLUMN updated_at TEXT NOT NULL DEFAULT ''");
             await db.ExecAsync("UPDATE story_text_files SET updated_at = created_at WHERE updated_at = ''");
         }
+        var hasTextDriveId = Convert.ToInt32(await db.ValueAsync("SELECT COUNT(*) FROM pragma_table_info('story_text_files') WHERE name='drive_file_id'")) > 0;
+        if (!hasTextDriveId) await db.ExecAsync("ALTER TABLE story_text_files ADD COLUMN drive_file_id TEXT NOT NULL DEFAULT ''");
+        var hasStoryDriveFolder = Convert.ToInt32(await db.ValueAsync("SELECT COUNT(*) FROM pragma_table_info('stories') WHERE name='drive_folder_id'")) > 0;
+        if (!hasStoryDriveFolder) await db.ExecAsync("ALTER TABLE stories ADD COLUMN drive_folder_id TEXT NOT NULL DEFAULT ''");
         // The persisted prefix never changes when a story slug/title is edited.
         await db.ExecAsync("UPDATE stories SET storage_prefix = 'stories/' || slug || '--' || id WHERE storage_prefix = ''");
         // V1.9: seed the catalog; preserve legacy single-genre story assignments.

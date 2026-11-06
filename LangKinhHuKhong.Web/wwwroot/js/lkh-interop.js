@@ -2,7 +2,7 @@
 // Blazor imports this ES module before invoking any audio/auth/upload method.
 // Static import makes the dependency load+execute deterministically.
 // site.js is intentionally a side-effect module, retained unchanged.
-import './site.js?v=1.9.5.0';
+import './site.js?v=1.9.5.1';
 
 function core(method) {
     const instance = window.lkh;
@@ -20,6 +20,8 @@ export const openNotepadFile = (...args) => core('openNotepadFile').openNotepadF
 export const initNewNotepadFile = (...args) => core('initNewNotepadFile').initNewNotepadFile(...args);
 export const saveNotepadFile = (...args) => core('saveNotepadFile').saveNotepadFile(...args);
 export const copyNotepadContent = (...args) => core('copyNotepadContent').copyNotepadContent(...args);
+export const openDriveNotepadFile = (...args) => core('openDriveNotepadFile').openDriveNotepadFile(...args);
+export const saveDriveNotepadFile = (...args) => core('saveDriveNotepadFile').saveDriveNotepadFile(...args);
 export const listen = (...args) => core('listen').listen(...args);
 export const stopAudio = (...args) => core('stopAudio').stopAudio(...args);
 export const bindAutoNext = (...args) => core('bindAutoNext').bindAutoNext(...args);
