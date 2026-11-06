@@ -444,22 +444,70 @@ public sealed class GoogleDriveService
         return folderId;
     }
 
-    private async Task<(string Id, string Name, bool Trashed)?> TryGetFileMetaAsync(string token, string fileId, CancellationToken ct)
+    private async Task<(string Id, string Name, bool Trashed, string ModifiedTime, int SizeBytes, string Description)?> TryGetFileMetaAsync(string token, string fileId, CancellationToken ct)
     {
         var client = httpFactory.CreateClient();
         using var req = new HttpRequestMessage(HttpMethod.Get,
-            $"https://www.googleapis.com/drive/v3/files/{Uri.EscapeDataString(fileId)}?fields=id,name,trashed");
+            $"https://www.googleapis.com/drive/v3/files/{Uri.EscapeDataString(fileId)}?fields=id,name,trashed,modifiedTime,size,description");
         req.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
         using var res = await client.SendAsync(req, ct);
         if (res.StatusCode == HttpStatusCode.NotFound) return null;
         if (!res.IsSuccessStatusCode) return null;
         using var doc = JsonDocument.Parse(await res.Content.ReadAsStringAsync(ct));
         var r = doc.RootElement;
+        var size = r.TryGetProperty("size", out var sz) && long.TryParse(sz.GetString(), out var parsedSize)
+            ? (int)Math.Min(int.MaxValue, parsedSize)
+            : 0;
         return (
             r.TryGetProperty("id", out var id) ? id.GetString() ?? "" : "",
             r.TryGetProperty("name", out var n) ? n.GetString() ?? "" : "",
-            r.TryGetProperty("trashed", out var tr) && tr.ValueKind == JsonValueKind.True
+            r.TryGetProperty("trashed", out var tr) && tr.ValueKind == JsonValueKind.True,
+            r.TryGetProperty("modifiedTime", out var mt) ? mt.GetString() ?? "" : "",
+            size,
+            r.TryGetProperty("description", out var desc) ? desc.GetString() ?? "" : ""
         );
+    }
+
+    public async Task<(string Id, string Name, bool Trashed, string ModifiedTime, int SizeBytes, string Description)?> GetDriveFileMetaPublicAsync(string driveFileId, CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(driveFileId) || !IsConnected) return null;
+        var token = await GetAccessTokenAsync(ct);
+        return await TryGetFileMetaAsync(token, driveFileId, ct);
+    }
+
+    public static DateTimeOffset ParseTimestampUtc(string? raw)
+    {
+        if (!string.IsNullOrWhiteSpace(raw) && DateTimeOffset.TryParse(raw, out var dto))
+            return dto.ToUniversalTime();
+        return DateTimeOffset.MinValue;
+    }
+
+    public static DateTimeOffset GetVpsTimestampUtc(Dictionary<string, object?> row, string localPath)
+    {
+        var dbTime = ParseTimestampUtc(row.S("updated_at"));
+        if (dbTime == DateTimeOffset.MinValue)
+            dbTime = ParseTimestampUtc(row.S("created_at"));
+
+        if (!string.IsNullOrWhiteSpace(localPath) && File.Exists(localPath))
+        {
+            try
+            {
+                var fileTime = new DateTimeOffset(File.GetLastWriteTimeUtc(localPath), TimeSpan.Zero);
+                return fileTime > dbTime ? fileTime : dbTime;
+            }
+            catch { }
+        }
+        return dbTime;
+    }
+
+    public static void AlignLocalFileTimestamp(string localPath, string? isoUtc)
+    {
+        if (string.IsNullOrWhiteSpace(localPath) || !File.Exists(localPath)) return;
+        var dto = ParseTimestampUtc(isoUtc);
+        if (dto > DateTimeOffset.MinValue)
+        {
+            try { File.SetLastWriteTimeUtc(localPath, dto.UtcDateTime); } catch { }
+        }
     }
 
     private async Task<string> FindFirstFileIdAsync(string token, string query, CancellationToken ct)
@@ -500,6 +548,13 @@ public sealed class GoogleDriveService
     public async Task<string> UpsertTextFileOnDriveAsync(
         string folderId, string existingDriveFileId, string fileName, string titleDescription, byte[] contentBytes, string extension, CancellationToken ct)
     {
+        var (id, _) = await UpsertTextFileOnDriveWithMetaAsync(folderId, existingDriveFileId, fileName, titleDescription, contentBytes, extension, ct);
+        return id;
+    }
+
+    public async Task<(string Id, string ModifiedTime)> UpsertTextFileOnDriveWithMetaAsync(
+        string folderId, string existingDriveFileId, string fileName, string titleDescription, byte[] contentBytes, string extension, CancellationToken ct)
+    {
         var token = await GetAccessTokenAsync(ct);
         var mimeType = extension == ".md" ? "text/markdown; charset=utf-8" : "text/plain; charset=utf-8";
 
@@ -509,7 +564,7 @@ public sealed class GoogleDriveService
             if (meta is not null && !meta.Value.Trashed)
             {
                 return await UploadMultipartAsync(token, HttpMethod.Patch,
-                    $"https://www.googleapis.com/upload/drive/v3/files/{Uri.EscapeDataString(existingDriveFileId)}?uploadType=multipart&fields=id,name",
+                    $"https://www.googleapis.com/upload/drive/v3/files/{Uri.EscapeDataString(existingDriveFileId)}?uploadType=multipart&fields=id,name,modifiedTime",
                     new { name = fileName, description = titleDescription }, contentBytes, mimeType, ct);
             }
         }
@@ -520,16 +575,16 @@ public sealed class GoogleDriveService
         if (!string.IsNullOrWhiteSpace(sameNameId))
         {
             return await UploadMultipartAsync(token, HttpMethod.Patch,
-                $"https://www.googleapis.com/upload/drive/v3/files/{Uri.EscapeDataString(sameNameId)}?uploadType=multipart&fields=id,name",
+                $"https://www.googleapis.com/upload/drive/v3/files/{Uri.EscapeDataString(sameNameId)}?uploadType=multipart&fields=id,name,modifiedTime",
                 new { name = fileName, description = titleDescription }, contentBytes, mimeType, ct);
         }
 
         return await UploadMultipartAsync(token, HttpMethod.Post,
-            "https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,name",
+            "https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,name,modifiedTime",
             new { name = fileName, description = titleDescription, parents = new[] { folderId } }, contentBytes, mimeType, ct);
     }
 
-    private async Task<string> UploadMultipartAsync(
+    private async Task<(string Id, string ModifiedTime)> UploadMultipartAsync(
         string token, HttpMethod method, string url, object metadata, byte[] fileBytes, string contentType, CancellationToken ct)
     {
         var boundary = "lkh_gdrive_" + Guid.NewGuid().ToString("N");
@@ -565,7 +620,10 @@ public sealed class GoogleDriveService
             throw new InvalidOperationException("Google Drive upload thất bại: " + respText);
 
         using var doc = JsonDocument.Parse(respText);
-        return doc.RootElement.GetProperty("id").GetString() ?? "";
+        var id = doc.RootElement.TryGetProperty("id", out var idEl) ? idEl.GetString() ?? "" : "";
+        var mod = doc.RootElement.TryGetProperty("modifiedTime", out var modEl) ? modEl.GetString() ?? "" : "";
+        if (string.IsNullOrWhiteSpace(mod)) mod = Helpers.Now();
+        return (id, mod);
     }
 
     public async Task DeleteDriveItemAsync(string driveFileId, CancellationToken ct)
@@ -724,7 +782,8 @@ public sealed class GoogleDriveService
 
         var utf8NoBom = new UTF8Encoding(false);
         var bytes = utf8NoBom.GetBytes(content ?? "");
-        var savedId = await UpsertTextFileOnDriveAsync(targetParent, driveFileId ?? "", cleanName, description ?? "", bytes, ext, ct);
+        var (savedId, driveMod) = await UpsertTextFileOnDriveWithMetaAsync(targetParent, driveFileId ?? "", cleanName, description ?? "", bytes, ext, ct);
+        var syncTime = !string.IsNullOrWhiteSpace(driveMod) ? driveMod : Helpers.Now();
 
         await using var db = await database.OpenAsync();
         var linked = await db.FirstAsync("SELECT id,story_id,stored_name,storage_target FROM story_text_files WHERE drive_file_id=@did", ("@did", savedId));
@@ -735,15 +794,355 @@ public sealed class GoogleDriveService
                 var localPath = Path.Combine(database.TextRoot, linked.S("story_id"), linked.S("stored_name"));
                 Directory.CreateDirectory(Path.GetDirectoryName(localPath)!);
                 await File.WriteAllBytesAsync(localPath, bytes, ct);
+                AlignLocalFileTimestamp(localPath, syncTime);
             }
             await db.ExecAsync(@"UPDATE story_text_files
                 SET title=@title, file_name=@fname, size_bytes=@size, updated_at=@now
                 WHERE id=@id",
                 ("@title", string.IsNullOrWhiteSpace(description) ? Path.GetFileNameWithoutExtension(cleanName) : description.Trim()),
-                ("@fname", cleanName), ("@size", bytes.Length), ("@now", Helpers.Now()), ("@id", linked.S("id")));
+                ("@fname", cleanName), ("@size", bytes.Length), ("@now", syncTime), ("@id", linked.S("id")));
         }
 
         return (savedId, cleanName, bytes.Length);
+    }
+
+    public async Task<(int PushedNew, int PushedUpdated, int PulledNew, int PulledUpdated, int StoriesSynced)> SyncSmartBothAsync(CancellationToken ct)
+    {
+        await using var db = await database.OpenAsync();
+        var stories = await db.ListAsync("SELECT id,title,slug,drive_folder_id FROM stories ORDER BY updated_at DESC");
+        int pushedNew = 0, pushedUpdated = 0, pulledNew = 0, pulledUpdated = 0, storiesSynced = 0;
+
+        foreach (var s in stories)
+        {
+            var sid = s.S("id");
+            var folderId = await EnsureStoryFolderAsync(db, sid, ct);
+            storiesSynced++;
+
+            var storyDir = Path.Combine(database.TextRoot, sid);
+            Directory.CreateDirectory(storyDir);
+
+            // 1. Get all text files currently in Google Drive story folder
+            var folderListing = await ListFolderItemsAsync(folderId, ct);
+            var json = JsonSerializer.SerializeToElement(folderListing);
+            var driveById = new Dictionary<string, JsonElement>(StringComparer.Ordinal);
+            var driveByName = new Dictionary<string, JsonElement>(StringComparer.OrdinalIgnoreCase);
+
+            if (json.TryGetProperty("items", out var items) && items.ValueKind == JsonValueKind.Array)
+            {
+                foreach (var item in items.EnumerateArray())
+                {
+                    if (item.TryGetProperty("isFolder", out var isF) && isF.ValueKind == JsonValueKind.True)
+                        continue;
+                    var name = item.TryGetProperty("name", out var n) ? n.GetString() ?? "" : "";
+                    var ext = Path.GetExtension(name).ToLowerInvariant();
+                    if (ext is not (".md" or ".txt")) continue;
+                    var dId = item.TryGetProperty("id", out var idEl) ? idEl.GetString() ?? "" : "";
+                    if (string.IsNullOrWhiteSpace(dId)) continue;
+
+                    driveById[dId] = item;
+                    if (!driveByName.ContainsKey(name))
+                        driveByName[name] = item;
+                }
+            }
+
+            // 2. Get all DB rows for this story
+            var dbFiles = await db.ListAsync("SELECT * FROM story_text_files WHERE story_id=@sid ORDER BY updated_at DESC", ("@sid", sid));
+            var handledDriveIds = new HashSet<string>(StringComparer.Ordinal);
+
+            foreach (var tf in dbFiles)
+            {
+                var tfId = tf.S("id");
+                var fname = tf.S("file_name");
+                var ext = tf.S("extension");
+                if (string.IsNullOrWhiteSpace(ext)) ext = Path.GetExtension(fname).ToLowerInvariant();
+                if (ext is not (".md" or ".txt")) ext = ".txt";
+
+                var sname = tf.S("stored_name");
+                var localPath = !string.IsNullOrWhiteSpace(sname) ? Path.Combine(storyDir, sname) : "";
+                var hasLocal = !string.IsNullOrWhiteSpace(localPath) && File.Exists(localPath);
+
+                var dbDriveId = tf.S("drive_file_id");
+                JsonElement? matchedDrive = null;
+                if (!string.IsNullOrWhiteSpace(dbDriveId) && driveById.TryGetValue(dbDriveId, out var byId))
+                {
+                    matchedDrive = byId;
+                }
+                else if (!string.IsNullOrWhiteSpace(fname) && driveByName.TryGetValue(fname, out var byName))
+                {
+                    matchedDrive = byName;
+                }
+
+                if (matchedDrive is not null)
+                {
+                    var dItem = matchedDrive.Value;
+                    var dId = dItem.GetProperty("id").GetString() ?? "";
+                    var dName = dItem.TryGetProperty("name", out var dn) ? dn.GetString() ?? fname : fname;
+                    var dModStr = dItem.TryGetProperty("modifiedTime", out var dm) ? dm.GetString() ?? "" : "";
+                    var dSize = dItem.TryGetProperty("sizeBytes", out var ds) && ds.TryGetInt32(out var dsz) ? dsz : 0;
+                    var dDesc = dItem.TryGetProperty("description", out var dd) ? dd.GetString() ?? "" : "";
+                    handledDriveIds.Add(dId);
+
+                    if (!hasLocal)
+                    {
+                        // Exists on Drive, missing on VPS -> Pull from Drive to VPS
+                        var (_, _, desc, _, modFromRead, _, content) = await ReadDriveFileTextAsync(dId, ct);
+                        var bytes = new UTF8Encoding(false).GetBytes(content);
+                        if (string.IsNullOrWhiteSpace(sname)) sname = tfId + ext;
+                        localPath = Path.Combine(storyDir, sname);
+                        await File.WriteAllBytesAsync(localPath, bytes, ct);
+                        var syncIso = !string.IsNullOrWhiteSpace(modFromRead) ? modFromRead : (!string.IsNullOrWhiteSpace(dModStr) ? dModStr : Helpers.Now());
+                        AlignLocalFileTimestamp(localPath, syncIso);
+
+                        var title = !string.IsNullOrWhiteSpace(tf.S("title")) ? tf.S("title") : (!string.IsNullOrWhiteSpace(desc) ? desc : Path.GetFileNameWithoutExtension(dName));
+                        await db.ExecAsync(@"UPDATE story_text_files
+                            SET title=@title, file_name=@fname, stored_name=@sname, size_bytes=@size, drive_file_id=@did, storage_target='both', updated_at=@now
+                            WHERE id=@id",
+                            ("@title", title), ("@fname", dName), ("@sname", sname), ("@size", bytes.Length), ("@did", dId), ("@now", syncIso), ("@id", tfId));
+                        pulledNew++;
+                    }
+                    else
+                    {
+                        // Exists on BOTH VPS and Drive -> Compare timestamps and overwrite older with newer!
+                        var vpsTimeUtc = GetVpsTimestampUtc(tf, localPath);
+                        var driveTimeUtc = ParseTimestampUtc(dModStr);
+                        var localBytes = await File.ReadAllBytesAsync(localPath, ct);
+                        var diffSeconds = (driveTimeUtc - vpsTimeUtc).TotalSeconds;
+
+                        bool driveIsNewer = diffSeconds > 2.0 || (Math.Abs(diffSeconds) <= 2.0 && dSize > 0 && dSize != localBytes.Length && driveTimeUtc >= vpsTimeUtc);
+                        bool vpsIsNewer = diffSeconds < -2.0 || (Math.Abs(diffSeconds) <= 2.0 && dSize > 0 && dSize != localBytes.Length && vpsTimeUtc > driveTimeUtc);
+
+                        if (driveIsNewer)
+                        {
+                            // Google Drive is newer -> Overwrite VPS with Drive file
+                            var (_, _, desc, _, modFromRead, _, content) = await ReadDriveFileTextAsync(dId, ct);
+                            var driveBytes = new UTF8Encoding(false).GetBytes(content);
+                            var contentDifferent = !localBytes.AsSpan().SequenceEqual(driveBytes);
+                            await File.WriteAllBytesAsync(localPath, driveBytes, ct);
+                            var syncIso = !string.IsNullOrWhiteSpace(modFromRead) ? modFromRead : (!string.IsNullOrWhiteSpace(dModStr) ? dModStr : Helpers.Now());
+                            AlignLocalFileTimestamp(localPath, syncIso);
+
+                            var title = !string.IsNullOrWhiteSpace(dDesc) ? dDesc : tf.S("title");
+                            await db.ExecAsync(@"UPDATE story_text_files
+                                SET title=@title, file_name=@fname, stored_name=@sname, size_bytes=@size, drive_file_id=@did, storage_target='both', updated_at=@now
+                                WHERE id=@id",
+                                ("@title", title), ("@fname", dName), ("@sname", sname), ("@size", driveBytes.Length), ("@did", dId), ("@now", syncIso), ("@id", tfId));
+                            if (contentDifferent) pulledUpdated++;
+                        }
+                        else if (vpsIsNewer)
+                        {
+                            // VPS is newer -> Overwrite Google Drive with VPS file
+                            var (savedDriveId, newDriveMod) = await UpsertTextFileOnDriveWithMetaAsync(
+                                folderId, dId, fname, tf.S("title"), localBytes, ext, ct);
+                            var syncIso = !string.IsNullOrWhiteSpace(newDriveMod) ? newDriveMod : Helpers.Now();
+                            AlignLocalFileTimestamp(localPath, syncIso);
+
+                            await db.ExecAsync(@"UPDATE story_text_files
+                                SET stored_name=@sname, size_bytes=@size, drive_file_id=@did, storage_target='both', updated_at=@now
+                                WHERE id=@id",
+                                ("@sname", sname), ("@size", localBytes.Length), ("@did", savedDriveId), ("@now", syncIso), ("@id", tfId));
+                            pushedUpdated++;
+                        }
+                        else
+                        {
+                            // Already in sync -> Ensure storage_target='both' and drive_file_id is set
+                            if (tf.S("storage_target") != "both" || tf.S("drive_file_id") != dId)
+                            {
+                                await db.ExecAsync("UPDATE story_text_files SET drive_file_id=@did, storage_target='both' WHERE id=@id",
+                                    ("@did", dId), ("@id", tfId));
+                            }
+                        }
+                    }
+                }
+                else if (hasLocal)
+                {
+                    // Exists only on VPS -> Push to Google Drive
+                    var localBytes = await File.ReadAllBytesAsync(localPath, ct);
+                    var (savedDriveId, newDriveMod) = await UpsertTextFileOnDriveWithMetaAsync(
+                        folderId, "", fname, tf.S("title"), localBytes, ext, ct);
+                    if (!string.IsNullOrWhiteSpace(savedDriveId))
+                    {
+                        handledDriveIds.Add(savedDriveId);
+                        var syncIso = !string.IsNullOrWhiteSpace(newDriveMod) ? newDriveMod : Helpers.Now();
+                        AlignLocalFileTimestamp(localPath, syncIso);
+                        await db.ExecAsync(@"UPDATE story_text_files
+                            SET drive_file_id=@did, size_bytes=@size, storage_target='both', updated_at=@now
+                            WHERE id=@id",
+                            ("@did", savedDriveId), ("@size", localBytes.Length), ("@now", syncIso), ("@id", tfId));
+                        pushedNew++;
+                    }
+                }
+            }
+
+            // 3. Any remaining files in Google Drive folder that were not in DB at all -> Pull to VPS
+            foreach (var kv in driveById)
+            {
+                var dId = kv.Key;
+                if (handledDriveIds.Contains(dId)) continue;
+
+                var dItem = kv.Value;
+                var dName = dItem.TryGetProperty("name", out var dn) ? dn.GetString() ?? "" : "";
+                var ext = Path.GetExtension(dName).ToLowerInvariant();
+                if (ext is not (".md" or ".txt")) continue;
+
+                var (_, _, desc, _, modFromRead, _, content) = await ReadDriveFileTextAsync(dId, ct);
+                var bytes = new UTF8Encoding(false).GetBytes(content);
+                var textId = Helpers.Id();
+                var storedName = textId + ext;
+                var destPath = Path.Combine(storyDir, storedName);
+                await File.WriteAllBytesAsync(destPath, bytes, ct);
+                var syncIso = !string.IsNullOrWhiteSpace(modFromRead) ? modFromRead : Helpers.Now();
+                AlignLocalFileTimestamp(destPath, syncIso);
+
+                var title = !string.IsNullOrWhiteSpace(desc) ? desc.Trim() : Path.GetFileNameWithoutExtension(dName);
+                if (title.Length > 180) title = title[..180];
+
+                await db.ExecAsync(@"INSERT INTO story_text_files(id,story_id,title,file_name,stored_name,extension,size_bytes,drive_file_id,storage_target,created_at,updated_at)
+                    VALUES(@id,@sid,@title,@fname,@sname,@ext,@size,@did,'both',@now,@now)",
+                    ("@id", textId), ("@sid", sid), ("@title", title), ("@fname", dName),
+                    ("@sname", storedName), ("@ext", ext), ("@size", bytes.Length), ("@did", dId), ("@now", syncIso));
+                pulledNew++;
+            }
+        }
+
+        return (pushedNew, pushedUpdated, pulledNew, pulledUpdated, storiesSynced);
+    }
+
+    public async Task<(string StoredName, string DriveFileId, int SizeBytes, string UpdatedAt, string WinnerSource)> SyncOrTransferSingleFileAsync(
+        SqliteConnection db, Dictionary<string, object?> row, string targetMode, CancellationToken ct)
+    {
+        var textId = row.S("id");
+        var storyId = row.S("story_id");
+        var fileName = row.S("file_name");
+        var title = row.S("title");
+        var ext = row.S("extension");
+        if (string.IsNullOrWhiteSpace(ext)) ext = Path.GetExtension(fileName).ToLowerInvariant();
+        if (ext is not (".md" or ".txt")) ext = ".txt";
+
+        var storedName = row.S("stored_name");
+        var driveId = row.S("drive_file_id");
+        var storyDir = Path.Combine(database.TextRoot, storyId);
+        var localPath = !string.IsNullOrWhiteSpace(storedName) ? Path.Combine(storyDir, storedName) : "";
+        var hasLocal = !string.IsNullOrWhiteSpace(localPath) && File.Exists(localPath);
+
+        string folderId = "";
+        (string Id, string Name, bool Trashed, string ModifiedTime, int SizeBytes, string Description)? driveMeta = null;
+
+        if (IsConnected)
+        {
+            var token = await GetAccessTokenAsync(ct);
+            folderId = await EnsureStoryFolderAsync(db, storyId, ct);
+            if (!string.IsNullOrWhiteSpace(driveId))
+            {
+                driveMeta = await TryGetFileMetaAsync(token, driveId, ct);
+                if (driveMeta is not null && driveMeta.Value.Trashed)
+                    driveMeta = null;
+            }
+            if (driveMeta is null && !string.IsNullOrWhiteSpace(fileName))
+            {
+                var q = $"'{EscapeDriveQuery(folderId)}' in parents and name='{EscapeDriveQuery(fileName)}' and trashed=false and mimeType!='application/vnd.google-apps.folder'";
+                var foundId = await FindFirstFileIdAsync(token, q, ct);
+                if (!string.IsNullOrWhiteSpace(foundId))
+                {
+                    driveId = foundId;
+                    driveMeta = await TryGetFileMetaAsync(token, foundId, ct);
+                }
+            }
+        }
+
+        var hasDrive = driveMeta is not null && !driveMeta.Value.Trashed;
+        byte[]? fileBytes = null;
+        string winnerSource = "vps";
+        string syncIso = Helpers.Now();
+
+        if (hasLocal && hasDrive)
+        {
+            // Both exist -> compare timestamps and pick the most recently updated file!
+            var vpsTimeUtc = GetVpsTimestampUtc(row, localPath);
+            var driveTimeUtc = ParseTimestampUtc(driveMeta!.Value.ModifiedTime);
+            var localBytes = await File.ReadAllBytesAsync(localPath, ct);
+            var diffSeconds = (driveTimeUtc - vpsTimeUtc).TotalSeconds;
+
+            if (diffSeconds > 2.0 || (Math.Abs(diffSeconds) <= 2.0 && driveMeta.Value.SizeBytes != localBytes.Length && driveTimeUtc >= vpsTimeUtc))
+            {
+                winnerSource = "drive";
+                var (_, _, _, _, modFromRead, _, content) = await ReadDriveFileTextAsync(driveId, ct);
+                fileBytes = new UTF8Encoding(false).GetBytes(content);
+                if (!string.IsNullOrWhiteSpace(modFromRead)) syncIso = modFromRead;
+                else if (!string.IsNullOrWhiteSpace(driveMeta.Value.ModifiedTime)) syncIso = driveMeta.Value.ModifiedTime;
+            }
+            else
+            {
+                winnerSource = "vps";
+                fileBytes = localBytes;
+                if (vpsTimeUtc > DateTimeOffset.MinValue) syncIso = vpsTimeUtc.ToString("O");
+            }
+        }
+        else if (hasLocal)
+        {
+            winnerSource = "vps";
+            fileBytes = await File.ReadAllBytesAsync(localPath, ct);
+        }
+        else if (hasDrive)
+        {
+            winnerSource = "drive";
+            var (_, _, _, _, modFromRead, _, content) = await ReadDriveFileTextAsync(driveId, ct);
+            fileBytes = new UTF8Encoding(false).GetBytes(content);
+            if (!string.IsNullOrWhiteSpace(modFromRead)) syncIso = modFromRead;
+        }
+        else
+        {
+            throw new InvalidOperationException("Không tìm thấy dữ liệu gốc của file trên VPS hoặc Google Drive.");
+        }
+
+        // Write/overwrite to target destinations using the newest fileBytes
+        if (targetMode is "drive" or "both")
+        {
+            if (!IsConnected)
+                throw new InvalidOperationException("Chưa kết nối tài khoản Google Drive.");
+            if (string.IsNullOrWhiteSpace(folderId))
+                folderId = await EnsureStoryFolderAsync(db, storyId, ct);
+
+            // Upload/overwrite on Drive if source was VPS or if file wasn't on Drive yet
+            if (winnerSource == "vps" || !hasDrive)
+            {
+                var (savedDriveId, newDriveMod) = await UpsertTextFileOnDriveWithMetaAsync(folderId, driveId, fileName, title, fileBytes, ext, ct);
+                driveId = savedDriveId;
+                if (!string.IsNullOrWhiteSpace(newDriveMod)) syncIso = newDriveMod;
+            }
+        }
+
+        if (targetMode is "vps" or "both")
+        {
+            Directory.CreateDirectory(storyDir);
+            if (string.IsNullOrWhiteSpace(storedName)) storedName = textId + ext;
+            localPath = Path.Combine(storyDir, storedName);
+            await File.WriteAllBytesAsync(localPath, fileBytes, ct);
+            AlignLocalFileTimestamp(localPath, syncIso);
+        }
+
+        if (targetMode == "drive")
+        {
+            if (!string.IsNullOrWhiteSpace(localPath) && File.Exists(localPath))
+            {
+                try { File.Delete(localPath); } catch { }
+            }
+            storedName = "";
+        }
+        else if (targetMode == "vps")
+        {
+            if (!string.IsNullOrWhiteSpace(driveId) && IsConnected)
+            {
+                try { await DeleteDriveItemAsync(driveId, ct); } catch { }
+            }
+            driveId = "";
+        }
+
+        await db.ExecAsync(@"UPDATE story_text_files
+            SET stored_name=@sname, drive_file_id=@did, size_bytes=@size, storage_target=@target, updated_at=@now
+            WHERE id=@id",
+            ("@sname", storedName), ("@did", driveId), ("@size", fileBytes.Length), ("@target", targetMode), ("@now", syncIso), ("@id", textId));
+
+        return (storedName, driveId, fileBytes.Length, syncIso, winnerSource);
     }
 
     public async Task<(int Uploaded, int StoriesSynced)> SyncPushAllToDriveAsync(CancellationToken ct)
@@ -767,7 +1166,7 @@ public sealed class GoogleDriveService
                 var localPath = Path.Combine(database.TextRoot, sid, sname);
                 if (!File.Exists(localPath)) continue;
                 var bytes = await File.ReadAllBytesAsync(localPath, ct);
-                var driveId = await UpsertTextFileOnDriveAsync(
+                var (driveId, driveMod) = await UpsertTextFileOnDriveWithMetaAsync(
                     folderId,
                     tf.S("drive_file_id"),
                     tf.S("file_name"),
@@ -777,8 +1176,10 @@ public sealed class GoogleDriveService
                     ct);
                 if (driveId != "")
                 {
-                    await db.ExecAsync("UPDATE story_text_files SET drive_file_id=@did, storage_target='both' WHERE id=@id",
-                        ("@did", driveId), ("@id", tf.S("id")));
+                    var syncIso = !string.IsNullOrWhiteSpace(driveMod) ? driveMod : Helpers.Now();
+                    AlignLocalFileTimestamp(localPath, syncIso);
+                    await db.ExecAsync("UPDATE story_text_files SET drive_file_id=@did, size_bytes=@size, storage_target='both', updated_at=@now WHERE id=@id",
+                        ("@did", driveId), ("@size", bytes.Length), ("@now", syncIso), ("@id", tf.S("id")));
                 }
                 uploadedCount++;
             }
@@ -816,12 +1217,12 @@ public sealed class GoogleDriveService
                 var driveId = item.TryGetProperty("id", out var idEl) ? idEl.GetString() ?? "" : "";
                 if (string.IsNullOrWhiteSpace(driveId)) continue;
 
-                var (_, _, desc, _, _, _, content) = await ReadDriveFileTextAsync(driveId, ct);
+                var (_, _, desc, _, modFromRead, _, content) = await ReadDriveFileTextAsync(driveId, ct);
                 var bytes = new UTF8Encoding(false).GetBytes(content);
-                var now = Helpers.Now();
+                var syncIso = !string.IsNullOrWhiteSpace(modFromRead) ? modFromRead : Helpers.Now();
 
                 var existing = await db.FirstAsync(
-                    "SELECT * FROM story_text_files WHERE story_id=@sid AND (drive_file_id=@did OR file_name=@fname) LIMIT 1",
+                    "SELECT * FROM story_text_files WHERE story_id=@sid AND (drive_file_id=@did OR LOWER(file_name)=LOWER(@fname)) LIMIT 1",
                     ("@sid", sid), ("@did", driveId), ("@fname", name));
 
                 if (existing is null)
@@ -830,13 +1231,14 @@ public sealed class GoogleDriveService
                     var storedName = textId + ext;
                     var destPath = Path.Combine(storyDir, storedName);
                     await File.WriteAllBytesAsync(destPath, bytes, ct);
+                    AlignLocalFileTimestamp(destPath, syncIso);
                     var title = !string.IsNullOrWhiteSpace(desc) ? desc.Trim() : Path.GetFileNameWithoutExtension(name);
                     if (title.Length > 180) title = title[..180];
 
                     await db.ExecAsync(@"INSERT INTO story_text_files(id,story_id,title,file_name,stored_name,extension,size_bytes,drive_file_id,storage_target,created_at,updated_at)
                         VALUES(@id,@sid,@title,@fname,@sname,@ext,@size,@did,'both',@now,@now)",
                         ("@id", textId), ("@sid", sid), ("@title", title), ("@fname", name),
-                        ("@sname", storedName), ("@ext", ext), ("@size", bytes.Length), ("@did", driveId), ("@now", now));
+                        ("@sname", storedName), ("@ext", ext), ("@size", bytes.Length), ("@did", driveId), ("@now", syncIso));
                     imported++;
                 }
                 else
@@ -844,12 +1246,13 @@ public sealed class GoogleDriveService
                     var sname = existing.S("stored_name");
                     if (string.IsNullOrWhiteSpace(sname)) sname = existing.S("id") + ext;
                     var destPath = Path.Combine(storyDir, sname);
-                    var localChanged = !File.Exists(destPath) || new FileInfo(destPath).Length != bytes.Length;
+                    var localChanged = !File.Exists(destPath) || !(await File.ReadAllBytesAsync(destPath, ct)).AsSpan().SequenceEqual(bytes);
                     await File.WriteAllBytesAsync(destPath, bytes, ct);
+                    AlignLocalFileTimestamp(destPath, syncIso);
                     await db.ExecAsync(@"UPDATE story_text_files
                         SET file_name=@fname, stored_name=@sname, size_bytes=@size, drive_file_id=@did, storage_target='both', updated_at=@now
                         WHERE id=@id",
-                        ("@fname", name), ("@sname", sname), ("@size", bytes.Length), ("@did", driveId), ("@now", now), ("@id", existing.S("id")));
+                        ("@fname", name), ("@sname", sname), ("@size", bytes.Length), ("@did", driveId), ("@now", syncIso), ("@id", existing.S("id")));
                     if (localChanged) updated++;
                 }
             }

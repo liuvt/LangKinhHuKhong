@@ -210,6 +210,7 @@
                                                 }
                                                 else if (target == "both")
                                                 {
+                                                    <button class="btn btn-sm btn-outline" title="Kiểm tra 2 bên và ghi đè bằng bản cập nhật mới nhất" disabled="@busy" @onclick='() => TransferTextFile(tf, "both")'>↻ Đồng bộ mới nhất</button>
                                                     <button class="btn btn-sm btn-outline" title="Chỉ giữ trên VPS (xóa bản trên Drive)" disabled="@busy" @onclick='() => TransferTextFile(tf, "vps")'>Chỉ VPS</button>
                                                     <button class="btn btn-sm btn-outline" title="Chỉ giữ trên Drive (xóa bản trên VPS)" disabled="@busy" @onclick='() => TransferTextFile(tf, "drive")'>Chỉ Drive</button>
                                                 }
@@ -528,6 +529,7 @@
                                             }
                                             else if (target == "both")
                                             {
+                                                <button class="btn btn-sm btn-outline" title="Kiểm tra 2 bên và ghi đè bằng bản cập nhật mới nhất" disabled="@busy" @onclick='() => TransferTextFile(tf, "both")'>↻ Đồng bộ mới nhất</button>
                                                 <button class="btn btn-sm btn-outline" title="Chỉ giữ trên VPS (xóa bản trên Drive)" disabled="@busy" @onclick='() => TransferTextFile(tf, "vps")'>Chỉ VPS</button>
                                                 <button class="btn btn-sm btn-outline" title="Chỉ giữ trên Drive (xóa bản trên VPS)" disabled="@busy" @onclick='() => TransferTextFile(tf, "drive")'>Chỉ Drive</button>
                                             }
@@ -996,17 +998,21 @@
             if (notepadFileId == tfId && notepadOpen)
             {
                 notepadStorageTarget = NormalizeTarget(Ui.Str(res, "storage_target"));
+                await OpenInNotepad(tfId);
             }
             allTextFileRows = Ui.Array(await Api.Get("/admin/texts"));
             storyRows = Ui.Array(await Api.Get("/admin/stories"));
             if (activeStoryId != "") await LoadEpisodes(false);
             if (showDriveExplorer) await BrowseDriveFolder(driveCurrentFolderId, driveCurrentFolderName);
-            Notify(target switch
-            {
-                "both" => $"Đã đồng bộ dự phòng file '{fname}': hiện đang được giữ trên cả VPS & Google Drive.",
-                "drive" => $"Đã chuyển file '{fname}' từ VPS sang Google Drive.",
-                _ => $"Đã chuyển file '{fname}' từ Google Drive về VPS."
-            });
+            var msg = Ui.Str(res, "message");
+            Notify(!string.IsNullOrWhiteSpace(msg)
+                ? msg
+                : (target switch
+                {
+                    "both" => $"Đã đồng bộ dự phòng file '{fname}' bằng bản cập nhật mới nhất.",
+                    "drive" => $"Đã chuyển file '{fname}' từ VPS sang Google Drive.",
+                    _ => $"Đã chuyển file '{fname}' từ Google Drive về VPS."
+                }));
         }
         catch (Exception e)
         {
