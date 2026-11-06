@@ -931,6 +931,31 @@ admin.MapPost("/gdrive/sync-pull", async Task<IResult> (HttpContext ctx, Databas
     }
 });
 
+admin.MapPost("/gdrive/sync-both", async Task<IResult> (HttpContext ctx, Database source, GoogleDriveService gdrive) =>
+{
+    if (!gdrive.IsConnected) return Bad("Chưa kết nối tài khoản Google Drive.");
+    try
+    {
+        var (uploaded, storiesSynced) = await gdrive.SyncPushAllToDriveAsync(ctx.RequestAborted);
+        var (imported, updated) = await gdrive.SyncPullFromDriveAsync(ctx.RequestAborted);
+        await using var db = await source.OpenAsync();
+        await Helpers.Audit(db, Helpers.UserId(ctx.User), "gdrive.sync_both", "",
+            $"pushed={uploaded}; pulled={imported}; updated={updated}; stories={storiesSynced}");
+        return Results.Ok(new
+        {
+            uploaded,
+            imported,
+            updated,
+            storiesSynced,
+            message = $"Đã đồng bộ 2 chiều (giữ dự phòng cả VPS & Drive): đẩy {uploaded} file lên Drive, kéo {imported} file mới & cập nhật {updated} file về VPS."
+        });
+    }
+    catch (Exception ex)
+    {
+        return Bad("Đồng bộ 2 chiều VPS ↔ Google Drive thất bại: " + ex.Message);
+    }
+});
+
 admin.MapGet("/gdrive/files", async Task<IResult> (string? folderId, HttpContext ctx, GoogleDriveService gdrive) =>
 {
     if (!gdrive.IsConnected) return Bad("Chưa kết nối tài khoản Google Drive.");
@@ -989,6 +1014,22 @@ admin.MapDelete("/gdrive/files/{driveFileId}", async Task<IResult> (string drive
     catch (Exception ex) { return Bad(ex.Message); }
 });
 
+static string NormalizeStorageTarget(string? raw, string fallback = "vps")
+{
+    var s = (raw ?? "").Trim().ToLowerInvariant();
+    return s is "drive" or "both" or "vps" ? s : fallback;
+}
+
+static string ComputeRowStorageTarget(Dictionary<string, object?> row)
+{
+    var hasLocal = !string.IsNullOrWhiteSpace(row.S("stored_name"));
+    var hasDrive = !string.IsNullOrWhiteSpace(row.S("drive_file_id"));
+    if (hasLocal && hasDrive) return "both";
+    if (!hasLocal && hasDrive) return "drive";
+    var raw = row.S("storage_target");
+    return raw is "drive" or "both" ? raw : "vps";
+}
+
 admin.MapGet("/texts", async Task<IResult> (string? storyId, Database source) =>
 {
     await using var db = await source.OpenAsync();
@@ -996,7 +1037,11 @@ admin.MapGet("/texts", async Task<IResult> (string? storyId, Database source) =>
     {
         if (!Regex.IsMatch(storyId, "^[a-f0-9]{32}$")) return Results.NotFound();
         return Results.Ok(await db.ListAsync(@"SELECT tf.id,tf.story_id,tf.title,tf.file_name,tf.extension,tf.size_bytes,tf.drive_file_id,
-            CASE WHEN tf.storage_target='drive' OR (tf.stored_name='' AND tf.drive_file_id<>'') THEN 'drive' ELSE 'vps' END AS storage_target,
+            CASE
+              WHEN tf.stored_name<>'' AND tf.drive_file_id<>'' THEN 'both'
+              WHEN tf.storage_target='drive' OR (tf.stored_name='' AND tf.drive_file_id<>'') THEN 'drive'
+              ELSE 'vps'
+            END AS storage_target,
             tf.created_at,
             CASE WHEN tf.updated_at<>'' THEN tf.updated_at ELSE tf.created_at END AS updated_at,
             s.title AS story_title, s.slug AS story_slug
@@ -1005,7 +1050,11 @@ admin.MapGet("/texts", async Task<IResult> (string? storyId, Database source) =>
             ORDER BY COALESCE(NULLIF(tf.updated_at,''), tf.created_at) DESC, tf.file_name ASC", ("@sid", storyId)));
     }
     return Results.Ok(await db.ListAsync(@"SELECT tf.id,tf.story_id,tf.title,tf.file_name,tf.extension,tf.size_bytes,tf.drive_file_id,
-        CASE WHEN tf.storage_target='drive' OR (tf.stored_name='' AND tf.drive_file_id<>'') THEN 'drive' ELSE 'vps' END AS storage_target,
+        CASE
+          WHEN tf.stored_name<>'' AND tf.drive_file_id<>'' THEN 'both'
+          WHEN tf.storage_target='drive' OR (tf.stored_name='' AND tf.drive_file_id<>'') THEN 'drive'
+          ELSE 'vps'
+        END AS storage_target,
         tf.created_at,
         CASE WHEN tf.updated_at<>'' THEN tf.updated_at ELSE tf.created_at END AS updated_at,
         s.title AS story_title, s.slug AS story_slug
@@ -1018,7 +1067,11 @@ admin.MapGet("/stories/{id}/texts", async Task<IResult> (string id, Database sou
     if (!Regex.IsMatch(id, "^[a-f0-9]{32}$")) return Results.NotFound();
     await using var db = await source.OpenAsync();
     return Results.Ok(await db.ListAsync(@"SELECT tf.id,tf.story_id,tf.title,tf.file_name,tf.extension,tf.size_bytes,tf.drive_file_id,
-        CASE WHEN tf.storage_target='drive' OR (tf.stored_name='' AND tf.drive_file_id<>'') THEN 'drive' ELSE 'vps' END AS storage_target,
+        CASE
+          WHEN tf.stored_name<>'' AND tf.drive_file_id<>'' THEN 'both'
+          WHEN tf.storage_target='drive' OR (tf.stored_name='' AND tf.drive_file_id<>'') THEN 'drive'
+          ELSE 'vps'
+        END AS storage_target,
         tf.created_at,
         CASE WHEN tf.updated_at<>'' THEN tf.updated_at ELSE tf.created_at END AS updated_at,
         s.title AS story_title
@@ -1029,8 +1082,8 @@ admin.MapGet("/stories/{id}/texts", async Task<IResult> (string id, Database sou
 admin.MapPost("/stories/{id}/texts/create", async Task<IResult> (string id, TextCreateReq req, HttpContext ctx, Database source, GoogleDriveService gdrive) =>
 {
     if (!Regex.IsMatch(id, "^[a-f0-9]{32}$")) return Results.NotFound();
-    var target = (req.StorageTarget ?? "vps").Trim().ToLowerInvariant() == "drive" ? "drive" : "vps";
-    if (target == "drive" && !gdrive.IsConnected)
+    var target = NormalizeStorageTarget(req.StorageTarget, "vps");
+    if (target is "drive" or "both" && !gdrive.IsConnected)
         return Bad("Chưa kết nối tài khoản Google Drive. Hãy kết nối Google Drive trước hoặc chọn lưu trên VPS.");
 
     var ext = (req.Extension ?? ".txt").Trim().ToLowerInvariant();
@@ -1062,7 +1115,17 @@ admin.MapPost("/stories/{id}/texts/create", async Task<IResult> (string id, Text
     var storedName = "";
     var driveFileId = "";
 
-    if (target == "drive")
+    if (target is "vps" or "both")
+    {
+        var storyDir = Path.Combine(source.TextRoot, id);
+        Directory.CreateDirectory(storyDir);
+        storedName = textId + ext;
+        var destPath = Path.Combine(storyDir, storedName);
+        await File.WriteAllBytesAsync(destPath, bytes, ctx.RequestAborted);
+        actualSize = new FileInfo(destPath).Length;
+    }
+
+    if (target is "drive" or "both")
     {
         try
         {
@@ -1071,17 +1134,13 @@ admin.MapPost("/stories/{id}/texts/create", async Task<IResult> (string id, Text
         }
         catch (Exception ex)
         {
-            return Bad("Không thể tạo file trên Google Drive: " + ex.Message);
+            if (storedName != "")
+            {
+                var p = Path.Combine(source.TextRoot, id, storedName);
+                if (File.Exists(p)) { try { File.Delete(p); } catch { } }
+            }
+            return Bad("Không thể lưu file trên Google Drive: " + ex.Message);
         }
-    }
-    else
-    {
-        var storyDir = Path.Combine(source.TextRoot, id);
-        Directory.CreateDirectory(storyDir);
-        storedName = textId + ext;
-        var destPath = Path.Combine(storyDir, storedName);
-        await File.WriteAllBytesAsync(destPath, bytes, ctx.RequestAborted);
-        actualSize = new FileInfo(destPath).Length;
     }
 
     await db.ExecAsync(@"INSERT INTO story_text_files(id,story_id,title,file_name,stored_name,extension,size_bytes,drive_file_id,storage_target,created_at,updated_at)
@@ -1112,8 +1171,8 @@ admin.MapPost("/stories/{id}/texts", async Task<IResult> (string id, HttpRequest
     if (!request.HasFormContentType) return Bad("Yêu cầu multipart/form-data.");
     var form = await request.ReadFormAsync(ctx.RequestAborted);
     var noteTitle = form["title"].ToString().Trim();
-    var target = form["storageTarget"].ToString().Trim().ToLowerInvariant() == "drive" ? "drive" : "vps";
-    if (target == "drive" && !gdrive.IsConnected)
+    var target = NormalizeStorageTarget(form["storageTarget"].ToString(), "vps");
+    if (target is "drive" or "both" && !gdrive.IsConnected)
         return Bad("Chưa kết nối tài khoản Google Drive. Hãy kết nối Google Drive trước khi upload lên Drive.");
     if (noteTitle.Length > 180) return Bad("Ghi chú / tiêu đề tối đa 180 ký tự.");
     if (form.Files.Count == 0) return Bad("Hãy chọn ít nhất 1 file .md hoặc .txt.");
@@ -1134,13 +1193,13 @@ admin.MapPost("/stories/{id}/texts", async Task<IResult> (string id, HttpRequest
     }
 
     var storyDir = Path.Combine(source.TextRoot, id);
-    if (target == "vps") Directory.CreateDirectory(storyDir);
+    if (target is "vps" or "both") Directory.CreateDirectory(storyDir);
     var createdItems = new List<object>();
     var writtenFiles = new List<string>();
     try
     {
         string driveFolderId = "";
-        if (target == "drive")
+        if (target is "drive" or "both")
         {
             driveFolderId = await gdrive.EnsureStoryFolderAsync(db, id, ctx.RequestAborted);
         }
@@ -1161,37 +1220,27 @@ admin.MapPost("/stories/{id}/texts", async Task<IResult> (string id, HttpRequest
             var driveFileId = "";
             long actualSize = 0;
 
-            if (target == "drive")
+            using var ms = new MemoryStream((int)Math.Min(f.Length, maxBytesPerFile));
+            await f.CopyToAsync(ms, ctx.RequestAborted);
+            var fileBytes = ms.ToArray();
+            if (fileBytes.Length >= 2 && ((fileBytes[0] == 'M' && fileBytes[1] == 'Z') ||
+                (fileBytes.Length >= 4 && fileBytes[0] == 0x7F && fileBytes[1] == 'E' && fileBytes[2] == 'L' && fileBytes[3] == 'F')))
             {
-                using var ms = new MemoryStream((int)Math.Min(f.Length, maxBytesPerFile));
-                await f.CopyToAsync(ms, ctx.RequestAborted);
-                var fileBytes = ms.ToArray();
-                if (fileBytes.Length >= 2 && ((fileBytes[0] == 'M' && fileBytes[1] == 'Z') ||
-                    (fileBytes.Length >= 4 && fileBytes[0] == 0x7F && fileBytes[1] == 'E' && fileBytes[2] == 'L' && fileBytes[3] == 'F')))
-                {
-                    throw new InvalidDataException($"File '{rawName}' là file thực thi nhị phân, không phải văn bản .md/.txt.");
-                }
-                actualSize = fileBytes.Length;
-                driveFileId = await gdrive.UpsertTextFileOnDriveAsync(driveFolderId, "", rawName, itemTitle, fileBytes, ext, ctx.RequestAborted);
+                throw new InvalidDataException($"File '{rawName}' là file thực thi nhị phân, không phải văn bản .md/.txt.");
             }
-            else
+            actualSize = fileBytes.Length;
+
+            if (target is "vps" or "both")
             {
                 storedName = textId + ext;
                 var destPath = Path.Combine(storyDir, storedName);
-                await using (var output = new FileStream(destPath, FileMode.CreateNew, FileAccess.Write, FileShare.None, 65536, true))
-                    await f.CopyToAsync(output, ctx.RequestAborted);
+                await File.WriteAllBytesAsync(destPath, fileBytes, ctx.RequestAborted);
                 writtenFiles.Add(destPath);
+            }
 
-                // Reject executable/archive binary headers disguised as .txt/.md
-                var header = new byte[Math.Min(8, (int)f.Length)];
-                await using (var checkStream = File.OpenRead(destPath))
-                    _ = await checkStream.ReadAsync(header, ctx.RequestAborted);
-                if (header.Length >= 2 && ((header[0] == 'M' && header[1] == 'Z') ||
-                    (header.Length >= 4 && header[0] == 0x7F && header[1] == 'E' && header[2] == 'L' && header[3] == 'F')))
-                {
-                    throw new InvalidDataException($"File '{rawName}' là file thực thi nhị phân, không phải văn bản .md/.txt.");
-                }
-                actualSize = new FileInfo(destPath).Length;
+            if (target is "drive" or "both")
+            {
+                driveFileId = await gdrive.UpsertTextFileOnDriveAsync(driveFolderId, "", rawName, itemTitle, fileBytes, ext, ctx.RequestAborted);
             }
 
             await db.ExecAsync(@"INSERT INTO story_text_files(id,story_id,title,file_name,stored_name,extension,size_bytes,drive_file_id,storage_target,created_at,updated_at)
@@ -1229,7 +1278,7 @@ admin.MapPost("/stories/{id}/texts", async Task<IResult> (string id, HttpRequest
         }
         if (ex is InvalidDataException) return Bad(ex.Message);
         ctx.RequestServices.GetRequiredService<ILoggerFactory>().CreateLogger("TextUpload").LogError(ex, "Không thể lưu file chữ");
-        return Bad(target == "drive"
+        return Bad(target is "drive" or "both"
             ? "Upload file chữ (.md, .txt) lên Google Drive thất bại: " + ex.Message
             : "Lưu file chữ (.md, .txt) lên VPS thất bại.");
     }
@@ -1246,12 +1295,15 @@ admin.MapGet("/texts/{textId}/content", async Task<IResult> (string textId, Http
 
     var storedName = row.S("stored_name");
     var driveId = row.S("drive_file_id");
-    var storageTarget = row.S("storage_target") == "drive" || (storedName == "" && driveId != "") ? "drive" : "vps";
+    var storageTarget = ComputeRowStorageTarget(row);
+    var localPath = !string.IsNullOrWhiteSpace(storedName)
+        ? Path.Combine(source.TextRoot, row.S("story_id"), storedName)
+        : "";
 
-    if (storageTarget == "drive" || string.IsNullOrWhiteSpace(storedName))
+    if (localPath == "" || !File.Exists(localPath))
     {
         if (string.IsNullOrWhiteSpace(driveId))
-            return Results.NotFound(new { error = "Không tìm thấy mã file trên Google Drive." });
+            return Results.NotFound(new { error = "Không tìm thấy file chữ trên VPS hoặc Google Drive." });
         if (!gdrive.IsConnected)
             return Bad("File này được lưu trên Google Drive. Vui lòng kết nối tài khoản Google Drive để đọc/sửa.");
         try
@@ -1267,7 +1319,7 @@ admin.MapGet("/texts/{textId}/content", async Task<IResult> (string textId, Http
                 extension = row.S("extension"),
                 sizeBytes = driveSize > 0 ? driveSize : row.N("size_bytes"),
                 driveFileId = driveId,
-                storageTarget = "drive",
+                storageTarget,
                 createdAt = row.S("created_at"),
                 updatedAt = !string.IsNullOrWhiteSpace(driveMod) ? driveMod : (row.S("updated_at") != "" ? row.S("updated_at") : row.S("created_at")),
                 truncated = false,
@@ -1280,12 +1332,9 @@ admin.MapGet("/texts/{textId}/content", async Task<IResult> (string textId, Http
         }
     }
 
-    var path = Path.Combine(source.TextRoot, row.S("story_id"), storedName);
-    if (!File.Exists(path)) return Results.NotFound(new { error = "Không tìm thấy file chữ trên ổ đĩa VPS." });
-
     const int maxEditBytes = 25 * 1024 * 1024; // Up to 25 MB editable in Online Notepad
-    var info = new FileInfo(path);
-    await using var fs = File.OpenRead(path);
+    var info = new FileInfo(localPath);
+    await using var fs = File.OpenRead(localPath);
     var toRead = (int)Math.Min(info.Length, maxEditBytes);
     var buffer = new byte[toRead];
     var read = await fs.ReadAsync(buffer.AsMemory(0, toRead), ctx.RequestAborted);
@@ -1303,7 +1352,7 @@ admin.MapGet("/texts/{textId}/content", async Task<IResult> (string textId, Http
         extension = row.S("extension"),
         sizeBytes = row.N("size_bytes"),
         driveFileId = row.S("drive_file_id"),
-        storageTarget = "vps",
+        storageTarget,
         createdAt = row.S("created_at"),
         updatedAt = row.S("updated_at") != "" ? row.S("updated_at") : row.S("created_at"),
         truncated = info.Length > maxEditBytes,
@@ -1318,12 +1367,12 @@ admin.MapPut("/texts/{textId}", async Task<IResult> (string textId, TextUpdateRe
     var old = await db.FirstAsync("SELECT * FROM story_text_files WHERE id=@id", ("@id", textId));
     if (old is null) return Results.NotFound();
 
-    var oldTarget = old.S("storage_target") == "drive" || (old.S("stored_name") == "" && old.S("drive_file_id") != "") ? "drive" : "vps";
+    var oldTarget = ComputeRowStorageTarget(old);
     var target = string.IsNullOrWhiteSpace(req.StorageTarget)
         ? oldTarget
-        : (req.StorageTarget.Trim().ToLowerInvariant() == "drive" ? "drive" : "vps");
+        : NormalizeStorageTarget(req.StorageTarget, oldTarget);
 
-    if (target == "drive" && !gdrive.IsConnected)
+    if (target is "drive" or "both" && !gdrive.IsConnected)
         return Bad("Chưa kết nối tài khoản Google Drive. Hãy kết nối Google Drive trước khi lưu lên Drive.");
 
     var targetStoryId = string.IsNullOrWhiteSpace(req.StoryId) ? old.S("story_id") : req.StoryId.Trim();
@@ -1358,23 +1407,7 @@ admin.MapPut("/texts/{textId}", async Task<IResult> (string textId, TextUpdateRe
         ? Path.Combine(source.TextRoot, old.S("story_id"), oldStoredName)
         : "";
 
-    if (target == "drive")
-    {
-        try
-        {
-            var folderId = await gdrive.EnsureStoryFolderAsync(db, targetStoryId, ctx.RequestAborted);
-            driveFileId = await gdrive.UpsertTextFileOnDriveAsync(folderId, driveFileId, rawName, rawTitle, bytes, ext, ctx.RequestAborted);
-        }
-        catch (Exception ex)
-        {
-            return Bad("Lưu file lên Google Drive thất bại: " + ex.Message);
-        }
-        if (oldPath != "" && File.Exists(oldPath))
-        {
-            try { File.Delete(oldPath); } catch { }
-        }
-    }
-    else
+    if (target is "vps" or "both")
     {
         var targetDir = Path.Combine(source.TextRoot, targetStoryId);
         Directory.CreateDirectory(targetDir);
@@ -1389,6 +1422,31 @@ admin.MapPut("/texts/{textId}", async Task<IResult> (string textId, TextUpdateRe
             try { File.Delete(oldPath); } catch { }
         }
         actualSize = new FileInfo(newPath).Length;
+    }
+
+    if (target is "drive" or "both")
+    {
+        try
+        {
+            var folderId = await gdrive.EnsureStoryFolderAsync(db, targetStoryId, ctx.RequestAborted);
+            driveFileId = await gdrive.UpsertTextFileOnDriveAsync(folderId, driveFileId, rawName, rawTitle, bytes, ext, ctx.RequestAborted);
+        }
+        catch (Exception ex)
+        {
+            return Bad("Lưu file lên Google Drive thất bại: " + ex.Message);
+        }
+    }
+
+    if (target == "drive" && oldPath != "" && File.Exists(oldPath))
+    {
+        try { File.Delete(oldPath); } catch { }
+    }
+    else if (target == "vps")
+    {
+        if (!string.IsNullOrWhiteSpace(driveFileId) && gdrive.IsConnected)
+        {
+            try { await gdrive.DeleteDriveItemAsync(driveFileId, ctx.RequestAborted); } catch { }
+        }
         driveFileId = "";
     }
 
@@ -1403,7 +1461,9 @@ admin.MapPut("/texts/{textId}", async Task<IResult> (string textId, TextUpdateRe
         $"textId={textId}; file={rawName}; size={actualSize}; target={target}");
     return Results.Ok(new
     {
-        message = target == "drive" ? "Đã lưu nội dung file chữ lên Google Drive." : "Đã lưu nội dung file chữ lên VPS.",
+        message = target == "both"
+            ? "Đã lưu nội dung file chữ lên cả VPS và Google Drive (Dự phòng)."
+            : (target == "drive" ? "Đã lưu nội dung file chữ lên Google Drive." : "Đã lưu nội dung file chữ lên VPS."),
         id = textId,
         storyId = targetStoryId,
         title = rawTitle,
@@ -1413,6 +1473,99 @@ admin.MapPut("/texts/{textId}", async Task<IResult> (string textId, TextUpdateRe
         driveFileId,
         storageTarget = target,
         updatedAt = now
+    });
+});
+
+admin.MapPost("/texts/{textId}/transfer", async Task<IResult> (string textId, TextTransferReq req, HttpContext ctx, Database source, GoogleDriveService gdrive) =>
+{
+    if (!Regex.IsMatch(textId, "^[a-f0-9]{32}$")) return Results.NotFound();
+    var target = NormalizeStorageTarget(req.Target, "both");
+    await using var db = await source.OpenAsync();
+    var row = await db.FirstAsync("SELECT * FROM story_text_files WHERE id=@id", ("@id", textId));
+    if (row is null) return Results.NotFound();
+
+    var storyId = row.S("story_id");
+    var ext = row.S("extension");
+    var fileName = row.S("file_name");
+    var title = row.S("title");
+    var storedName = row.S("stored_name");
+    var driveId = row.S("drive_file_id");
+    var localPath = !string.IsNullOrWhiteSpace(storedName) ? Path.Combine(source.TextRoot, storyId, storedName) : "";
+
+    byte[]? fileBytes = null;
+    if (localPath != "" && File.Exists(localPath))
+    {
+        fileBytes = await File.ReadAllBytesAsync(localPath, ctx.RequestAborted);
+    }
+    else if (!string.IsNullOrWhiteSpace(driveId))
+    {
+        if (!gdrive.IsConnected)
+            return Bad("Chưa kết nối tài khoản Google Drive để đọc file từ Drive.");
+        fileBytes = await gdrive.DownloadDriveFileBytesAsync(driveId, ctx.RequestAborted);
+    }
+
+    if (fileBytes is null)
+        return Bad("Không tìm thấy dữ liệu gốc của file trên VPS hoặc Google Drive.");
+
+    if (target is "drive" or "both")
+    {
+        if (!gdrive.IsConnected)
+            return Bad("Chưa kết nối tài khoản Google Drive.");
+        try
+        {
+            var folderId = await gdrive.EnsureStoryFolderAsync(db, storyId, ctx.RequestAborted);
+            driveId = await gdrive.UpsertTextFileOnDriveAsync(folderId, driveId, fileName, title, fileBytes, ext, ctx.RequestAborted);
+        }
+        catch (Exception ex)
+        {
+            return Bad("Không thể đẩy file lên Google Drive: " + ex.Message);
+        }
+    }
+
+    if (target is "vps" or "both")
+    {
+        var storyDir = Path.Combine(source.TextRoot, storyId);
+        Directory.CreateDirectory(storyDir);
+        if (string.IsNullOrWhiteSpace(storedName)) storedName = textId + ext;
+        var destPath = Path.Combine(storyDir, storedName);
+        await File.WriteAllBytesAsync(destPath, fileBytes, ctx.RequestAborted);
+    }
+
+    if (target == "drive")
+    {
+        if (localPath != "" && File.Exists(localPath))
+        {
+            try { File.Delete(localPath); } catch { }
+        }
+        storedName = "";
+    }
+    else if (target == "vps")
+    {
+        if (!string.IsNullOrWhiteSpace(driveId) && gdrive.IsConnected)
+        {
+            try { await gdrive.DeleteDriveItemAsync(driveId, ctx.RequestAborted); } catch { }
+        }
+        driveId = "";
+    }
+
+    var now = Helpers.Now();
+    await db.ExecAsync(@"UPDATE story_text_files
+        SET stored_name=@sname, drive_file_id=@did, size_bytes=@size, storage_target=@target, updated_at=@now
+        WHERE id=@id",
+        ("@sname", storedName), ("@did", driveId), ("@size", fileBytes.Length), ("@target", target), ("@now", now), ("@id", textId));
+
+    await Helpers.Audit(db, Helpers.UserId(ctx.User), "story.text_transfer", storyId,
+        $"textId={textId}; file={fileName}; target={target}");
+    return Results.Ok(new
+    {
+        id = textId,
+        storageTarget = target,
+        driveFileId = driveId,
+        message = target == "both"
+            ? $"Đã đồng bộ dự phòng '{fileName}' trên cả VPS và Google Drive."
+            : (target == "drive"
+                ? $"Đã chuyển '{fileName}' sang Google Drive (đã giải phóng bản trên VPS)."
+                : $"Đã chuyển '{fileName}' về VPS (đã gỡ bản trên Google Drive).")
     });
 });
 
@@ -2271,6 +2424,7 @@ public record BankAccountReq(string Label,string BankBin,string BankName,string 
 public record BankActivationReq(bool IsActive);
 public record TextCreateReq(string Title, string FileName, string Extension, string Content, string? StorageTarget = "vps");
 public record TextUpdateReq(string StoryId, string Title, string FileName, string Extension, string Content, string? StorageTarget = null);
+public record TextTransferReq(string Target);
 public record GDriveConfigReq(string? ClientId, string? ClientSecret, string? RootFolderId, string? RootFolderName);
 public record GDriveFolderCreateReq(string? ParentFolderId, string Name);
 public record GDriveFileSaveReq(string? DriveFileId, string? ParentFolderId, string FileName, string Title, string Content);

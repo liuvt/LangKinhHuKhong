@@ -775,9 +775,9 @@ public sealed class GoogleDriveService
                     bytes,
                     tf.S("extension"),
                     ct);
-                if (driveId != "" && driveId != tf.S("drive_file_id"))
+                if (driveId != "")
                 {
-                    await db.ExecAsync("UPDATE story_text_files SET drive_file_id=@did WHERE id=@id",
+                    await db.ExecAsync("UPDATE story_text_files SET drive_file_id=@did, storage_target='both' WHERE id=@id",
                         ("@did", driveId), ("@id", tf.S("id")));
                 }
                 uploadedCount++;
@@ -833,21 +833,23 @@ public sealed class GoogleDriveService
                     var title = !string.IsNullOrWhiteSpace(desc) ? desc.Trim() : Path.GetFileNameWithoutExtension(name);
                     if (title.Length > 180) title = title[..180];
 
-                    await db.ExecAsync(@"INSERT INTO story_text_files(id,story_id,title,file_name,stored_name,extension,size_bytes,drive_file_id,created_at,updated_at)
-                        VALUES(@id,@sid,@title,@fname,@sname,@ext,@size,@did,@now,@now)",
+                    await db.ExecAsync(@"INSERT INTO story_text_files(id,story_id,title,file_name,stored_name,extension,size_bytes,drive_file_id,storage_target,created_at,updated_at)
+                        VALUES(@id,@sid,@title,@fname,@sname,@ext,@size,@did,'both',@now,@now)",
                         ("@id", textId), ("@sid", sid), ("@title", title), ("@fname", name),
                         ("@sname", storedName), ("@ext", ext), ("@size", bytes.Length), ("@did", driveId), ("@now", now));
                     imported++;
                 }
                 else
                 {
-                    var destPath = Path.Combine(storyDir, existing.S("stored_name"));
+                    var sname = existing.S("stored_name");
+                    if (string.IsNullOrWhiteSpace(sname)) sname = existing.S("id") + ext;
+                    var destPath = Path.Combine(storyDir, sname);
                     var localChanged = !File.Exists(destPath) || new FileInfo(destPath).Length != bytes.Length;
                     await File.WriteAllBytesAsync(destPath, bytes, ct);
                     await db.ExecAsync(@"UPDATE story_text_files
-                        SET file_name=@fname, size_bytes=@size, drive_file_id=@did, updated_at=@now
+                        SET file_name=@fname, stored_name=@sname, size_bytes=@size, drive_file_id=@did, storage_target='both', updated_at=@now
                         WHERE id=@id",
-                        ("@fname", name), ("@size", bytes.Length), ("@did", driveId), ("@now", now), ("@id", existing.S("id")));
+                        ("@fname", name), ("@sname", sname), ("@size", bytes.Length), ("@did", driveId), ("@now", now), ("@id", existing.S("id")));
                     if (localChanged) updated++;
                 }
             }
