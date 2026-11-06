@@ -2,7 +2,7 @@
 // Blazor imports this ES module before invoking any audio/auth/upload method.
 // Static import makes the dependency load+execute deterministically.
 // site.js is intentionally a side-effect module, retained unchanged.
-import './site.js?v=1.9.4.7';
+import './site.js?v=1.9.4.8';
 
 function core(method) {
     const instance = window.lkh;

@@ -28,5 +28,12 @@ public static class Ui
     public static string Money(int amount) => amount.ToString("N0", CultureInfo.GetCultureInfo("vi-VN")) + "đ";
     public static string Date(string input)
         => DateTimeOffset.TryParse(input, out var d) ? d.ToLocalTime().ToString("dd/MM/yyyy HH:mm") : "—";
-    public static string Duration(int seconds) => $"{seconds/60:00}:{seconds%60:00}";
+    public static string Duration(int seconds)
+    {
+        var s = Math.Max(0, seconds);
+        var h = s / 3600;
+        var m = (s % 3600) / 60;
+        var ss = s % 60;
+        return h > 0 ? $"{h}:{m:00}:{ss:00}" : $"{m:00}:{ss:00}";
+    }
 }

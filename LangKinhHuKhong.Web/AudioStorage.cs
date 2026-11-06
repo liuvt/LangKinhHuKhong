@@ -267,7 +267,7 @@ public sealed class AudioStorage : IDisposable
         try
         {
             // Limit concurrency and put playlist last: readers never see an incomplete publication.
-            using var gate=new SemaphoreSlim(8);
+            using var gate=new SemaphoreSlim(16);
             var tasks=files.Where(f=>Path.GetFileName(f)!="index.m3u8").Select(async file=>
             {
                 await gate.WaitAsync(ct);
@@ -280,6 +280,58 @@ public sealed class AudioStorage : IDisposable
             return "r2:"+prefix;
         }
         catch { await DeleteHlsPrefixBestEffortAsync("r2:"+prefix); throw; }
+    }
+
+    public async Task<(bool Ready, string StorageMode, string Detail)> VerifyEpisodeStorageAsync(
+        string fullReference, string previewReference, string hlsReference, CancellationToken ct)
+    {
+        try
+        {
+            var isR2Obj = fullReference.StartsWith("r2:", StringComparison.Ordinal);
+            if (isR2Obj)
+            {
+                if (s3 is null) return (false, "R2", "Cloudflare R2 chưa được cấu hình trên máy chủ.");
+                var fullMeta = await s3.GetObjectMetadataAsync(bucket, fullReference[3..], ct);
+                if (fullMeta.ContentLength <= 0) return (false, "R2", "File MP3 đầy đủ trên R2 có kích thước 0 byte.");
+                if (previewReference.StartsWith("r2:", StringComparison.Ordinal))
+                {
+                    var prevMeta = await s3.GetObjectMetadataAsync(bucket, previewReference[3..], ct);
+                    if (prevMeta.ContentLength <= 0) return (false, "R2", "File Preview trên R2 có kích thước 0 byte.");
+                }
+                if (hlsReference.StartsWith("r2:", StringComparison.Ordinal))
+                {
+                    var m3u8Meta = await s3.GetObjectMetadataAsync(bucket, hlsReference[3..] + "/index.m3u8", ct);
+                    var keyMeta = await s3.GetObjectMetadataAsync(bucket, hlsReference[3..] + "/key.bin", ct);
+                    if (m3u8Meta.ContentLength <= 0 || keyMeta.ContentLength <= 0)
+                        return (false, "R2", "Playlist HLS trên R2 chưa hoàn tất.");
+                }
+                return (true, "R2", "Đã xác nhận đủ MP3, Preview và HLS trên Cloudflare R2.");
+            }
+            else
+            {
+                var fullLocal = Path.Combine(database.AudioRoot, fullReference);
+                var prevLocal = Path.Combine(database.AudioRoot, previewReference);
+                if (!File.Exists(fullLocal) || new FileInfo(fullLocal).Length <= 0)
+                    return (false, "Local", "Chưa tìm thấy file MP3 đầy đủ trên ổ đĩa máy chủ.");
+                if (!File.Exists(prevLocal) || new FileInfo(prevLocal).Length <= 0)
+                    return (false, "Local", "Chưa tìm thấy file Preview trên ổ đĩa máy chủ.");
+                if (hlsReference.StartsWith("hls-local:", StringComparison.Ordinal))
+                {
+                    var m3u8Local = Path.Combine(database.DataRoot, "hls-private", hlsReference["hls-local:".Length..], "index.m3u8");
+                    if (!File.Exists(m3u8Local)) return (false, "Local", "Chưa tìm thấy playlist HLS trên máy chủ.");
+                }
+                return (true, "Local", "Đã xác nhận đủ MP3, Preview và HLS trên máy chủ.");
+            }
+        }
+        catch (AmazonS3Exception ex) when (ex.StatusCode == HttpStatusCode.NotFound || ex.ErrorCode == "NoSuchKey")
+        {
+            return (false, "R2", "Chưa tìm thấy đầy đủ object trên Cloudflare R2.");
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "Không thể kiểm tra trạng thái lưu trữ cho tập {Full}", fullReference);
+            return (false, fullReference.StartsWith("r2:", StringComparison.Ordinal) ? "R2" : "Local", "Lỗi khi kiểm tra trạng thái lưu trữ.");
+        }
     }
 
     public async Task MaterializeSourceAudioAsync(string audioReference, string destination, CancellationToken ct)

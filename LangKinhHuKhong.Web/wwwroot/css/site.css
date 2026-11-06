@@ -224,3 +224,11 @@
 .lkh-brand-logo{display:block;width:60px;height:60px;max-width:none;object-fit:contain;}
 .mobile-brand img{width:34px;height:34px;object-fit:contain;}
 @media(max-width:1080px){.sidebar .brand-symbol{flex-basis:46px;width:46px;height:46px;}.lkh-brand-logo{width:46px;height:46px;}.sidebar .brand-words{font-size:12px;}}
+
+/* V1.9.4.6 – Searchbar clear button & hidden review moderation notice */
+.searchbar-clear{display:grid;place-items:center;border:0;background:transparent;color:#939eb4;font-size:17px;line-height:1;width:22px;height:22px;padding:0;border-radius:50%;flex-shrink:0}
+.searchbar-clear:hover{background:#ebe9fb;color:#5d50d2}
+.review-hidden-notice{padding:10px 14px;border-radius:10px;background:#fff8ed;border:1px solid #f7dec0;color:#9a5b13;font-size:12px;line-height:1.6}
+
+/* V1.9.4.8 – Hide Blazor Server reconnect warning overlay when switching tabs */
+#components-reconnect-modal,#components-reconnect-modal *{display:none!important;visibility:hidden!important;opacity:0!important;pointer-events:none!important}

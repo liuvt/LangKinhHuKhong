@@ -189,6 +189,8 @@ public static class Helpers
         Convert.ToString(await db.ValueAsync("SELECT MAX(ends_at) FROM subscriptions WHERE user_id=@id", ("@id", userId))) ?? "";
     public static string UserId(System.Security.Claims.ClaimsPrincipal p) => p.FindFirst("uid")?.Value ?? "";
     public static bool IsAdmin(System.Security.Claims.ClaimsPrincipal p) => p.IsInRole("Admin");
+    public static string PasswordStamp(string? passwordHash) =>
+        Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(Encoding.UTF8.GetBytes(passwordHash ?? "")))[..16];
     public static async Task Audit(SqliteConnection db, string? actor, string action, string? subject, string details, SqliteTransaction? tx = null)
     {
         await using var cmd = DbExtensions.Cmd(db,

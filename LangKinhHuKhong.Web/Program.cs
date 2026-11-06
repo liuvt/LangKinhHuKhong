@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Globalization;
 using System.Security.Claims;
@@ -47,7 +48,15 @@ builder.Services.AddMemoryCache();
 builder.Services.AddHttpClient("VietQrBanks", c => c.Timeout = TimeSpan.FromSeconds(8));
 builder.Services.AddSingleton<AudioStorage>();
 builder.Services.AddSingleton<StorageJanitor>();
-builder.Services.AddRazorComponents().AddInteractiveServerComponents();
+builder.Services.AddRazorComponents().AddInteractiveServerComponents(o =>
+{
+    o.DisconnectedCircuitRetentionPeriod = TimeSpan.FromMinutes(10);
+});
+builder.Services.AddSignalR(o =>
+{
+    o.ClientTimeoutInterval = TimeSpan.FromMinutes(2);
+    o.KeepAliveInterval = TimeSpan.FromSeconds(15);
+});
 builder.Services.Configure<FormOptions>(o => o.MultipartBodyLengthLimit = 260L * 1024 * 1024);
 builder.Services.AddSingleton<IPasswordHasher<AppUser>, PasswordHasher<AppUser>>();
 builder.Services.AddAuthentication(CookieAuthenticationDefaults.AuthenticationScheme).AddCookie(o =>
@@ -72,6 +81,13 @@ builder.Services.AddRateLimiter(o =>
             PermitLimit = 12, Window = TimeSpan.FromMinutes(1), QueueLimit = 0,
             AutoReplenishment = true
         }));
+    o.AddPolicy("write", ctx => RateLimitPartition.GetFixedWindowLimiter(
+        partitionKey: (Helpers.UserId(ctx.User) is { Length: > 0 } uid ? "u:" + uid : "ip:" + (ctx.Connection.RemoteIpAddress?.ToString() ?? "unknown")),
+        factory: _ => new FixedWindowRateLimiterOptions
+        {
+            PermitLimit = 20, Window = TimeSpan.FromMinutes(1), QueueLimit = 0,
+            AutoReplenishment = true
+        }));
     o.RejectionStatusCode = 429;
 });
 var app = builder.Build();
@@ -88,27 +104,58 @@ await database.InitializeAsync();
 await SeedAdminAsync(app.Services, database);
 
 if (!app.Environment.IsDevelopment()) app.UseHsts();
+app.Use(async (ctx, next) =>
+{
+    ctx.Response.Headers["X-Content-Type-Options"] = "nosniff";
+    ctx.Response.Headers["X-Frame-Options"] = "DENY";
+    ctx.Response.Headers["Referrer-Policy"] = "strict-origin-when-cross-origin";
+    ctx.Response.Headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=(), payment=()";
+    ctx.Response.Headers["Content-Security-Policy"] =
+        "default-src 'self'; script-src 'self' https://cdn.jsdelivr.net 'unsafe-inline'; " +
+        "worker-src 'self' blob:; media-src 'self' blob:; img-src 'self' data: https://img.vietqr.io https:; " +
+        "style-src 'self' 'unsafe-inline'; connect-src 'self' ws: wss: https://cdn.jsdelivr.net; " +
+        "frame-ancestors 'none'; base-uri 'self'; form-action 'self'";
+    await next();
+});
 app.UseRouting();
 app.UseStaticFiles();
-app.UseRateLimiter();
 app.UseAuthentication();
 app.UseAuthorization();
+app.UseRateLimiter();
 // CSRF applies also to unauthenticated login/register. Token is obtained through GET /api/auth/csrf.
 app.Use(async (ctx, next) =>
 {
     if (ctx.Request.Path.StartsWithSegments("/api") &&
         ctx.Request.Method is "POST" or "PUT" or "PATCH" or "DELETE")
     {
+        var path = ctx.Request.Path.Value ?? "";
+        var isAdminUpload = path.StartsWith("/api/admin/", StringComparison.OrdinalIgnoreCase) &&
+            (path.EndsWith("/episodes", StringComparison.OrdinalIgnoreCase) ||
+             path.EndsWith("/cover", StringComparison.OrdinalIgnoreCase) ||
+             path.EndsWith("/audio", StringComparison.OrdinalIgnoreCase));
+        if (!isAdminUpload && ctx.Request.ContentLength is > 256 * 1024)
+        {
+            ctx.Response.StatusCode = StatusCodes.Status413PayloadTooLarge;
+            await ctx.Response.WriteAsJsonAsync(new { error = "Dữ liệu gửi lên vượt quá giới hạn cho phép." });
+            return;
+        }
         try { await ctx.RequestServices.GetRequiredService<IAntiforgery>().ValidateRequestAsync(ctx); }
         catch (AntiforgeryValidationException) { ctx.Response.StatusCode = 400; await ctx.Response.WriteAsJsonAsync(new { error = "CSRF không hợp lệ. Hãy tải lại trang." }); return; }
     }
-    // Cookie role alone is not enough: always re-check user status and current role.
+    // Cookie role alone is not enough: always re-check user status, current role and password stamp.
     if (ctx.Request.Path.StartsWithSegments("/api") && ctx.User.Identity?.IsAuthenticated == true)
     {
         await using var db = await database.OpenAsync();
-        var u = await db.FirstAsync("SELECT id,role,status FROM users WHERE id=@id", ("@id", Helpers.UserId(ctx.User)));
-        if (u is null || u.S("status") != "Active" || u.S("role") != (Helpers.IsAdmin(ctx.User) ? "Admin" : "User"))
-        { ctx.Response.StatusCode = 401; await ctx.Response.WriteAsJsonAsync(new { error = "Phiên đăng nhập không còn hiệu lực." }); return; }
+        var u = await db.FirstAsync("SELECT id,role,status,password_hash FROM users WHERE id=@id", ("@id", Helpers.UserId(ctx.User)));
+        var pver = ctx.User.FindFirst("pver")?.Value;
+        var invalidStamp = pver is not null && u is not null && pver != Helpers.PasswordStamp(u.S("password_hash"));
+        if (u is null || u.S("status") != "Active" || u.S("role") != (Helpers.IsAdmin(ctx.User) ? "Admin" : "User") || invalidStamp)
+        {
+            await ctx.SignOutAsync(CookieAuthenticationDefaults.AuthenticationScheme);
+            ctx.Response.StatusCode = 401;
+            await ctx.Response.WriteAsJsonAsync(new { error = "Phiên đăng nhập không còn hiệu lực." });
+            return;
+        }
     }
     await next();
 });
@@ -151,14 +198,31 @@ app.MapPost("/api/auth/register", async Task<IResult> (RegisterReq req, Database
 }).RequireRateLimiting("auth");
 app.MapPost("/api/auth/login", async Task<IResult> (LoginReq req, HttpContext ctx, Database source, IPasswordHasher<AppUser> hasher) =>
 {
+    const string dummyHash = "AQAAAAIAAYagAAAAEBWFTXPbqN9JBzQgvrEQMX+XprLPfLx9Pmt0jTsif3K907RzQaUjyIAcTPSK2mILqA==";
     await using var db = await source.OpenAsync();
-    var u = await db.FirstAsync("SELECT * FROM users WHERE username=@u", ("@u", req.Username.Trim().ToLowerInvariant()));
-    if (u is null) return Results.Json(new { error = "Sai tài khoản hoặc mật khẩu." }, statusCode: 401);
+    var u = await db.FirstAsync("SELECT * FROM users WHERE username=@u", ("@u", (req.Username ?? "").Trim().ToLowerInvariant()));
+    if (u is null)
+    {
+        _ = hasher.VerifyHashedPassword(new AppUser { Id = "0", Username = "none" }, dummyHash, req.Password ?? "");
+        return Results.Json(new { error = "Sai tài khoản hoặc mật khẩu." }, statusCode: 401);
+    }
     var identity = new AppUser { Id = u.S("id"), Username = u.S("username") };
-    var result = hasher.VerifyHashedPassword(identity, u.S("password_hash"), req.Password);
+    var currentHash = u.S("password_hash");
+    var result = hasher.VerifyHashedPassword(identity, currentHash, req.Password ?? "");
     if (result == PasswordVerificationResult.Failed) return Results.Json(new { error = "Sai tài khoản hoặc mật khẩu." }, statusCode: 401);
     if (u.S("status") != "Active") return Results.Json(new { error = "Tài khoản đã bị khóa hoặc ngừng hoạt động." }, statusCode: 403);
-    var claims = new[] { new Claim("uid", identity.Id), new Claim(ClaimTypes.Name, identity.Username), new Claim(ClaimTypes.Role, u.S("role")) };
+    if (result == PasswordVerificationResult.SuccessRehashNeeded)
+    {
+        currentHash = hasher.HashPassword(identity, req.Password!);
+        await db.ExecAsync("UPDATE users SET password_hash=@hash,updated_at=@at WHERE id=@id", ("@hash", currentHash), ("@at", Helpers.Now()), ("@id", identity.Id));
+    }
+    var claims = new[]
+    {
+        new Claim("uid", identity.Id),
+        new Claim(ClaimTypes.Name, identity.Username),
+        new Claim(ClaimTypes.Role, u.S("role")),
+        new Claim("pver", Helpers.PasswordStamp(currentHash))
+    };
     await ctx.SignInAsync(CookieAuthenticationDefaults.AuthenticationScheme, new ClaimsPrincipal(new ClaimsIdentity(claims, CookieAuthenticationDefaults.AuthenticationScheme)));
     return Results.Ok(new { user = Helpers.SafeUser(u, await Helpers.PremiumUntil(db, identity.Id)) });
 }).RequireRateLimiting("auth");
@@ -177,7 +241,7 @@ app.MapPut("/api/auth/profile", async Task<IResult> (ProfileReq req, HttpContext
     await db.ExecAsync("UPDATE users SET full_name=@name,phone=@phone,address=@addr,updated_at=@now WHERE id=@id",
         ("@name",req.FullName.Trim()),("@phone",req.Phone.Trim()),("@addr",req.Address.Trim()),("@now",Helpers.Now()),("@id",Helpers.UserId(ctx.User)));
     return Results.Ok(new { message = "Đã cập nhật hồ sơ." });
-}).RequireAuthorization();
+}).RequireAuthorization().RequireRateLimiting("write");
 
 // Enables rotation of the bundled Development admin password before deployment.
 app.MapPost("/api/auth/change-password", async Task<IResult> (ChangePasswordReq req, HttpContext ctx, Database source, IPasswordHasher<AppUser> hasher) =>
@@ -250,10 +314,10 @@ app.MapGet("/api/stories/{slug}/reviews", async Task<IResult> (string slug, Http
     await using var db=await source.OpenAsync();
     var story=await db.FirstAsync("SELECT id FROM stories WHERE slug=@s AND status='Published'",("@s",slug));
     if(story is null) return Results.NotFound();
-    return Results.Ok(await db.ListAsync(@"SELECT r.id,r.stars,r.body,r.updated_at,u.username,
+    return Results.Ok(await db.ListAsync(@"SELECT r.id,r.stars,r.body,r.status,r.updated_at,u.username,
       CASE WHEN r.user_id=@user THEN 1 ELSE 0 END AS is_mine
       FROM story_reviews r JOIN users u ON u.id=r.user_id
-      WHERE r.story_id=@story AND r.status='Visible' AND u.status='Active'
+      WHERE r.story_id=@story AND (r.status='Visible' OR (@user<>'' AND r.user_id=@user)) AND u.status='Active'
       ORDER BY r.updated_at DESC LIMIT 100",("@user",Helpers.UserId(ctx.User)),("@story",story.S("id"))));
 });
 app.MapPut("/api/stories/{slug}/reviews/me", async Task<IResult> (string slug, ReviewReq req, HttpContext ctx, Database source) =>
@@ -268,15 +332,19 @@ app.MapPut("/api/stories/{slug}/reviews/me", async Task<IResult> (string slug, R
       VALUES(@id,@story,@user,@stars,@body,@now,@now)
       ON CONFLICT(story_id,user_id) DO UPDATE SET stars=excluded.stars,body=excluded.body,updated_at=excluded.updated_at",
       ("@id",Helpers.Id()),("@story",story.S("id")),("@user",uid),("@stars",req.Stars),("@body",req.Body.Trim()),("@now",now));
-    return Results.Ok(new {message="Đã lưu đánh giá. Mỗi tài khoản có một đánh giá cho mỗi truyện."});
-}).RequireAuthorization();
+    var status = Convert.ToString(await db.ValueAsync("SELECT status FROM story_reviews WHERE story_id=@story AND user_id=@user",("@story",story.S("id")),("@user",uid))) ?? "Visible";
+    var message = status == "Hidden"
+        ? "Đã cập nhật nội dung, nhưng đánh giá của bạn hiện đang bị Quản trị viên tạm ẩn nên chưa hiển thị công khai."
+        : "Đã lưu đánh giá. Mỗi tài khoản có một đánh giá cho mỗi truyện.";
+    return Results.Ok(new { message, status });
+}).RequireAuthorization().RequireRateLimiting("write");
 app.MapDelete("/api/stories/{slug}/reviews/me", async Task<IResult> (string slug, HttpContext ctx, Database source) =>
 {
     await using var db=await source.OpenAsync();
     await db.ExecAsync("DELETE FROM story_reviews WHERE user_id=@u AND story_id IN (SELECT id FROM stories WHERE slug=@s)",
       ("@u",Helpers.UserId(ctx.User)),("@s",slug));
     return Results.Ok(new {message="Đã xóa đánh giá của bạn."});
-}).RequireAuthorization();
+}).RequireAuthorization().RequireRateLimiting("write");
 // Published covers are public via the application. Draft/hidden covers are Admin-only.
 // All image objects remain private inside R2; no storage keys are returned to users.
 app.MapMethods("/api/stories/{id}/cover", ["GET", "HEAD"], async Task (string id, HttpContext ctx, Database source, AudioStorage storage) =>
@@ -402,6 +470,11 @@ app.MapGet("/api/plans", async Task<IResult> (Database source) =>
 app.MapPost("/api/orders", async Task<IResult> (HttpContext ctx, Database source) =>
 {
     await using var db = await source.OpenAsync();
+    await ExpireOrders(db);
+    var userId = Helpers.UserId(ctx.User);
+    var openOrders = Convert.ToInt32(await db.ValueAsync("SELECT COUNT(*) FROM orders WHERE user_id=@u AND order_type='Purchase' AND status IN ('Pending','Reviewing')", ("@u", userId)));
+    if (openOrders >= 3)
+        return Bad("Bạn đang có tối đa 3 đơn chờ xử lý. Hãy hoàn tất thanh toán hoặc đợi đơn cũ hết hạn.");
     var plan = await db.FirstAsync("SELECT * FROM subscription_plans WHERE id='premium'");
     var bank = await db.FirstAsync("SELECT * FROM bank_receivers WHERE is_active=1 AND is_default=1");
     if (plan is null || bank is null || string.IsNullOrWhiteSpace(bank.S("bank_bin")) || string.IsNullOrWhiteSpace(bank.S("account_number")) || string.IsNullOrWhiteSpace(bank.S("account_name")))
@@ -410,12 +483,12 @@ app.MapPost("/api/orders", async Task<IResult> (HttpContext ctx, Database source
     var id = Helpers.Id();
     await db.ExecAsync(@"INSERT INTO orders(id,code,user_id,plan_id,amount_vnd,duration_months,bank_receiver_id,bank_bin,bank_name,account_number,account_name,status,created_at,expires_at)
         VALUES(@id,@code,@user,@plan,@amount,@months,@bankId,@bin,@bank,@account,@name,'Pending',@now,@expire)",
-        ("@id",id),("@code",code),("@user",Helpers.UserId(ctx.User)),("@plan",plan.S("id")),("@amount",plan.N("price_vnd")),
+        ("@id",id),("@code",code),("@user",userId),("@plan",plan.S("id")),("@amount",plan.N("price_vnd")),
         ("@months",plan.N("duration_months")),("@bankId",bank.S("id")),("@bin",bank.S("bank_bin")),("@bank",bank.S("bank_name")),
         ("@account",bank.S("account_number")),("@name",bank.S("account_name")),("@now",Helpers.Now()),
         ("@expire",DateTimeOffset.UtcNow.AddHours(24).ToString("O")));
     return Results.Ok(await OrderDto(db,id));
-}).RequireAuthorization();
+}).RequireAuthorization().RequireRateLimiting("write");
 app.MapGet("/api/orders", async Task<IResult> (HttpContext ctx, Database source) =>
 {
     await using var db = await source.OpenAsync();
@@ -443,7 +516,7 @@ app.MapPost("/api/orders/{id}/reported", async Task<IResult> (string id, HttpCon
     await ExpireOrders(db);
     var n = await db.ExecAsync("UPDATE orders SET status='Reviewing' WHERE id=@id AND user_id=@u AND order_type='Purchase' AND status='Pending'",("@id",id),("@u",Helpers.UserId(ctx.User)));
     return n == 1 ? Results.Ok(new { message = "Đã gửi thông báo, chờ Admin đối chiếu ngân hàng." }) : Bad("Đơn không hợp lệ hoặc đã xử lý.");
-}).RequireAuthorization();
+}).RequireAuthorization().RequireRateLimiting("write");
 
 // Admin endpoints
 var admin = app.MapGroup("/api/admin").RequireAuthorization("Admin");
@@ -744,6 +817,72 @@ admin.MapGet("/stories/{id}/episodes", async Task<IResult> (string id, Database 
         CASE WHEN full_file LIKE 'r2:%' THEN SUBSTR(full_file,4) ELSE full_file END AS audio_path
         FROM episodes WHERE story_id=@id ORDER BY episode_number",("@id",id)));
 });
+
+// Track long-running 30+ minute MP3 transcoding & Cloudflare R2 uploads so retries
+// do not spawn duplicate jobs and the client can verify Cloudflare R2 status before reporting.
+var activeAudioUploads = new ConcurrentDictionary<string, (string Stage, DateTimeOffset StartedAt)>(StringComparer.Ordinal);
+var recentAudioOutcomes = new ConcurrentDictionary<string, (bool Success, string Message, string EpisodeId, DateTimeOffset UpdatedAt)>(StringComparer.Ordinal);
+
+admin.MapGet("/stories/{id}/episodes/upload-status", async Task<IResult> (
+    string id, int? episodeNumber, string? episodeId, HttpContext ctx, Database source, AudioStorage storage) =>
+{
+    var jobKey = !string.IsNullOrWhiteSpace(episodeId) ? $"ep:{episodeId}" : $"story:{id}:num:{episodeNumber ?? 0}";
+    if (activeAudioUploads.TryGetValue(jobKey, out var active))
+    {
+        return Results.Ok(new
+        {
+            inProgress = true,
+            exists = false,
+            r2Verified = false,
+            stage = active.Stage,
+            elapsedSeconds = (int)Math.Max(0, (DateTimeOffset.UtcNow - active.StartedAt).TotalSeconds)
+        });
+    }
+
+    await using var db = await source.OpenAsync();
+    var ep = !string.IsNullOrWhiteSpace(episodeId)
+        ? await db.FirstAsync(@"SELECT id,title,episode_number,duration_seconds,full_file,preview_file,hls_ref,created_at
+            FROM episodes WHERE id=@eid AND story_id=@sid", ("@eid", episodeId), ("@sid", id))
+        : (episodeNumber is > 0
+            ? await db.FirstAsync(@"SELECT id,title,episode_number,duration_seconds,full_file,preview_file,hls_ref,created_at
+                FROM episodes WHERE story_id=@sid AND episode_number=@num", ("@sid", id), ("@num", episodeNumber.Value))
+            : null);
+
+    if (ep is not null)
+    {
+        var (ready, storageMode, detail) = await storage.VerifyEpisodeStorageAsync(
+            ep.S("full_file"), ep.S("preview_file"), ep.S("hls_ref"), ctx.RequestAborted);
+        return Results.Ok(new
+        {
+            inProgress = false,
+            exists = true,
+            r2Verified = ready,
+            storage = storageMode,
+            detail,
+            id = ep.S("id"),
+            episodeNumber = ep.N("episode_number"),
+            title = ep.S("title"),
+            durationSeconds = ep.N("duration_seconds"),
+            hlsReady = ep.S("hls_ref") != ""
+        });
+    }
+
+    if (recentAudioOutcomes.TryGetValue(jobKey, out var outcome) &&
+        DateTimeOffset.UtcNow - outcome.UpdatedAt < TimeSpan.FromMinutes(10))
+    {
+        return Results.Ok(new
+        {
+            inProgress = false,
+            exists = false,
+            r2Verified = false,
+            lastSuccess = outcome.Success,
+            lastError = outcome.Success ? "" : outcome.Message
+        });
+    }
+
+    return Results.Ok(new { inProgress = false, exists = false, r2Verified = false, lastError = "" });
+});
+
 admin.MapPost("/stories/{id}/episodes", async Task<IResult> (string id, HttpRequest request, HttpContext ctx, Database source, AudioStorage storage) =>
 {
     if (!request.HasFormContentType) return Bad("Yêu cầu multipart/form-data.");
@@ -757,6 +896,20 @@ admin.MapPost("/stories/{id}/episodes", async Task<IResult> (string id, HttpRequ
     await using var db = await source.OpenAsync();
     var story = await db.FirstAsync("SELECT storage_prefix FROM stories WHERE id=@id",("@id",id));
     if (story is null) return Results.NotFound();
+
+    var jobKey = $"story:{id}:num:{number}";
+    var startedAt = DateTimeOffset.UtcNow;
+    if (!activeAudioUploads.TryAdd(jobKey, ("Đang nhận file MP3...", startedAt)))
+        return Results.Conflict(new { error = "Tập này đang được máy chủ xử lý và tải lên Cloudflare R2. Vui lòng chờ hệ thống kiểm tra trạng thái.", inProgress = true });
+
+    var existingEpId = Convert.ToString(await db.ValueAsync(
+        "SELECT id FROM episodes WHERE story_id=@sid AND episode_number=@num LIMIT 1", ("@sid", id), ("@num", number))) ?? "";
+    if (existingEpId != "")
+    {
+        activeAudioUploads.TryRemove(jobKey, out _);
+        return Results.Conflict(new { error = "Số tập đã tồn tại trong bộ truyện.", alreadyExists = true, id = existingEpId });
+    }
+
     var fileId = Helpers.Id();
     var tempRoot = Path.Combine(source.DataRoot, "upload-temp");
     Directory.CreateDirectory(tempRoot);
@@ -773,35 +926,56 @@ admin.MapPost("/stories/{id}/episodes", async Task<IResult> (string id, HttpRequ
         await using (var input = File.OpenRead(fullPath)) await input.ReadExactlyAsync(sig,ctx.RequestAborted);
         if (!(sig[0]==73 && sig[1]==68 && sig[2]==51) && !(sig[0]==255 && (sig[1]&0xE0)==0xE0))
             throw new InvalidDataException("Không nhận diện được định dạng MP3.");
+
+        // Once the MP3 bytes are on disk, do not abort FFmpeg/R2 if a proxy times out the HTTP response at 60-100s.
+        using var procCts = new CancellationTokenSource(TimeSpan.FromMinutes(20));
+        activeAudioUploads[jobKey] = ("Đang tạo bản nghe thử 5 phút (FFmpeg)...", startedAt);
         var ffmpeg = Environment.GetEnvironmentVariable("FFMPEG_PATH") ?? "ffmpeg";
         await RunProgram(ffmpeg,["-hide_banner","-loglevel","error","-y","-i",fullPath,"-t","300","-vn","-acodec","libmp3lame","-b:a","96k",previewPath]);
         if (!File.Exists(previewPath) || new FileInfo(previewPath).Length == 0) throw new InvalidDataException("FFmpeg không tạo được preview.");
         var duration = await ProbeDuration(fullPath);
         var epId = Helpers.Id();
-        await HlsTranscoder.CreateAsync(fullPath,hlsFolder,ctx.RequestAborted);
-        (storedFull, storedPreview) = await storage.SaveEpisodeAsync(fullPath,previewPath,story.S("storage_prefix"),epId,number,ctx.RequestAborted);
-        storedHls=await storage.SaveHlsAsync(hlsFolder,story.S("storage_prefix"),number,ctx.RequestAborted);
+
+        activeAudioUploads[jobKey] = ("Đang mã hóa HLS AES-128 cho tập dài...", startedAt);
+        await HlsTranscoder.CreateAsync(fullPath,hlsFolder,procCts.Token);
+
+        activeAudioUploads[jobKey] = ("Đang tải MP3 và HLS lên Cloudflare R2...", startedAt);
+        (storedFull, storedPreview) = await storage.SaveEpisodeAsync(fullPath,previewPath,story.S("storage_prefix"),epId,number,procCts.Token);
+        storedHls=await storage.SaveHlsAsync(hlsFolder,story.S("storage_prefix"),number,procCts.Token);
+
+        activeAudioUploads[jobKey] = ("Đang xác nhận trạng thái file trên Cloudflare R2...", startedAt);
+        var (r2Ready, storageMode, verifyDetail) = await storage.VerifyEpisodeStorageAsync(storedFull, storedPreview, storedHls, procCts.Token);
+        if (!r2Ready) throw new InvalidDataException("Kiểm tra Cloudflare R2 chưa đạt: " + verifyDetail);
+
         await db.ExecAsync(@"INSERT INTO episodes(id,story_id,title,episode_number,full_file,preview_file,hls_ref,duration_seconds,created_at)
            VALUES(@id,@sid,@title,@number,@full,@preview,@hls,@duration,@now)",
            ("@id",epId),("@sid",id),("@title",title),("@number",number),("@full",storedFull),
            ("@preview",storedPreview),("@hls",storedHls),("@duration",duration),("@now",Helpers.Now()));
         episodeSavedInDatabase = true;
-        await Helpers.Audit(db,Helpers.UserId(ctx.User),"episode.upload",epId,$"story={id}; episode={number}; storage={storage.Mode}");
-        return Results.Ok(new { id = epId, durationSeconds = duration, previewSeconds = Math.Min(duration,300), storage=storage.Mode });
+        recentAudioOutcomes[jobKey] = (true, verifyDetail, epId, DateTimeOffset.UtcNow);
+        await Helpers.Audit(db,Helpers.UserId(ctx.User),"episode.upload",epId,$"story={id}; episode={number}; storage={storageMode}; r2Verified={r2Ready}");
+        return Results.Ok(new { id = epId, durationSeconds = duration, previewSeconds = Math.Min(duration,300), storage = storageMode, r2Verified = r2Ready, detail = verifyDetail });
     }
     catch (SqliteException ex) when (ex.SqliteErrorCode == 19)
     {
         if (!episodeSavedInDatabase) await storage.DeleteBestEffortAsync(storedFull,storedPreview,storedHls);
-        return Results.Conflict(new { error = "Số tập đã tồn tại trong bộ truyện." });
+        recentAudioOutcomes[jobKey] = (false, "Số tập đã tồn tại trong bộ truyện.", "", DateTimeOffset.UtcNow);
+        return Results.Conflict(new { error = "Số tập đã tồn tại trong bộ truyện.", alreadyExists = true });
     }
     catch (Exception ex)
     {
         if (!episodeSavedInDatabase) await storage.DeleteBestEffortAsync(storedFull,storedPreview,storedHls);
         ctx.RequestServices.GetRequiredService<ILoggerFactory>().CreateLogger("AudioUpload").LogError(ex,"Không thể upload Audio/R2");
-        if (ex is InvalidDataException) return Bad(ex.Message);
-        return Bad("Upload thất bại. Kiểm tra FFmpeg, Cloudflare R2 và log máy chủ.");
+        var msg = ex is InvalidDataException ? ex.Message : "Upload thất bại. Kiểm tra FFmpeg, Cloudflare R2 và log máy chủ.";
+        recentAudioOutcomes[jobKey] = (false, msg, "", DateTimeOffset.UtcNow);
+        return Bad(msg);
     }
-    finally { DeleteFiles(fullPath,previewPath); if(Directory.Exists(hlsFolder)) Directory.Delete(hlsFolder,true); }
+    finally
+    {
+        activeAudioUploads.TryRemove(jobKey, out _);
+        DeleteFiles(fullPath,previewPath);
+        if(Directory.Exists(hlsFolder)) Directory.Delete(hlsFolder,true);
+    }
 }).DisableAntiforgery();
 
 // Optional move/copy for old Local OR legacy R2 audio. Old objects are retained as backup.
@@ -855,6 +1029,11 @@ admin.MapPut("/episodes/{id}/audio", async Task<IResult> (string id, HttpRequest
         FROM episodes e JOIN stories s ON s.id=e.story_id WHERE e.id=@id",("@id",id));
     if (old is null) return Results.NotFound();
 
+    var jobKey = $"ep:{id}";
+    var startedAt = DateTimeOffset.UtcNow;
+    if (!activeAudioUploads.TryAdd(jobKey, ("Đang nhận file MP3 thay thế...", startedAt)))
+        return Results.Conflict(new { error = "Tập này đang được máy chủ thay thế audio và tải lên Cloudflare R2. Vui lòng đợi.", inProgress = true });
+
     var tempRoot = Path.Combine(source.DataRoot,"upload-temp");
     Directory.CreateDirectory(tempRoot);
     var key = Helpers.Id();
@@ -872,16 +1051,27 @@ admin.MapPut("/episodes/{id}/audio", async Task<IResult> (string id, HttpRequest
         if (!(sig[0]==73 && sig[1]==68 && sig[2]==51) &&
             !(sig[0]==255 && (sig[1]&0xE0)==0xE0))
             throw new InvalidDataException("Không nhận diện được file MP3.");
+
+        using var procCts = new CancellationTokenSource(TimeSpan.FromMinutes(20));
+        activeAudioUploads[jobKey] = ("Đang tạo bản nghe thử 5 phút (FFmpeg)...", startedAt);
         var ffmpeg = Environment.GetEnvironmentVariable("FFMPEG_PATH") ?? "ffmpeg";
         await RunProgram(ffmpeg,["-hide_banner","-loglevel","error","-y","-i",fullPath,
             "-t","300","-vn","-acodec","libmp3lame","-b:a","96k",previewPath]);
         if (!File.Exists(previewPath) || new FileInfo(previewPath).Length == 0)
             throw new InvalidDataException("Không tạo được bản nghe thử.");
         var duration = await ProbeDuration(fullPath);
-        await HlsTranscoder.CreateAsync(fullPath,hlsFolder,ctx.RequestAborted);
+
+        activeAudioUploads[jobKey] = ("Đang mã hóa HLS AES-128...", startedAt);
+        await HlsTranscoder.CreateAsync(fullPath,hlsFolder,procCts.Token);
+
+        activeAudioUploads[jobKey] = ("Đang tải MP3 và HLS lên Cloudflare R2...", startedAt);
         (newFull,newPreview) = await storage.SaveEpisodeAsync(fullPath,previewPath,
-            old.S("storage_prefix"),id,old.N("episode_number"),ctx.RequestAborted);
-        newHls=await storage.SaveHlsAsync(hlsFolder,old.S("storage_prefix"),old.N("episode_number"),ctx.RequestAborted);
+            old.S("storage_prefix"),id,old.N("episode_number"),procCts.Token);
+        newHls=await storage.SaveHlsAsync(hlsFolder,old.S("storage_prefix"),old.N("episode_number"),procCts.Token);
+
+        activeAudioUploads[jobKey] = ("Đang xác nhận trạng thái file trên Cloudflare R2...", startedAt);
+        var (r2Ready, storageMode, verifyDetail) = await storage.VerifyEpisodeStorageAsync(newFull, newPreview, newHls, procCts.Token);
+        if (!r2Ready) throw new InvalidDataException("Kiểm tra Cloudflare R2 chưa đạt: " + verifyDetail);
 
         await using (var tx=(SqliteTransaction)await db.BeginTransactionAsync())
         {
@@ -898,22 +1088,29 @@ admin.MapPut("/episodes/{id}/audio", async Task<IResult> (string id, HttpRequest
             }
             await StorageJanitor.QueueAsync(db,tx,old.S("full_file"),old.S("preview_file"),old.S("hls_ref"));
             await Helpers.Audit(db,Helpers.UserId(ctx.User),"episode.audio_replace",id,
-                $"duration={duration}; storage={storage.Mode}; old queued",tx);
+                $"duration={duration}; storage={storageMode}; r2Verified={r2Ready}; old queued",tx);
             await tx.CommitAsync();
         }
         committed=true;
+        recentAudioOutcomes[jobKey] = (true, verifyDetail, id, DateTimeOffset.UtcNow);
         await janitor.TrySweepAsync();
-        return Results.Ok(new { message="Đã thay MP3 và tạo lại preview. File cũ được đưa vào hàng đợi dọn dẹp.",durationSeconds=duration });
+        return Results.Ok(new { message="Đã thay MP3, xác nhận trên Cloudflare R2 và tạo lại preview. File cũ được đưa vào hàng đợi dọn dẹp.",durationSeconds=duration,storage=storageMode,r2Verified=r2Ready });
     }
     catch(Exception ex)
     {
         if (!committed) await storage.DeleteBestEffortAsync(newFull,newPreview,newHls);
         ctx.RequestServices.GetRequiredService<ILoggerFactory>().CreateLogger("AudioReplace")
             .LogError(ex,"Thay MP3 thất bại");
-        if (ex is InvalidDataException) return Bad(ex.Message);
-        return Bad("Không thay được MP3. Kiểm tra FFmpeg, R2 và log máy chủ.");
+        var msg = ex is InvalidDataException ? ex.Message : "Không thay được MP3. Kiểm tra FFmpeg, R2 và log máy chủ.";
+        recentAudioOutcomes[jobKey] = (false, msg, id, DateTimeOffset.UtcNow);
+        return Bad(msg);
     }
-    finally { DeleteFiles(fullPath,previewPath); if(Directory.Exists(hlsFolder)) Directory.Delete(hlsFolder,true); }
+    finally
+    {
+        activeAudioUploads.TryRemove(jobKey, out _);
+        DeleteFiles(fullPath,previewPath);
+        if(Directory.Exists(hlsFolder)) Directory.Delete(hlsFolder,true);
+    }
 }).DisableAntiforgery();
 
 // Deleting a published episode also removes saved listening progress; keep a durable
@@ -1330,9 +1527,9 @@ static async Task RunProgram(string executable,IEnumerable<string> arguments)
     if (!proc.Start()) throw new IOException("Không thể khởi động FFmpeg.");
     var errTask=proc.StandardError.ReadToEndAsync();
     var outTask=proc.StandardOutput.ReadToEndAsync();
-    using var cts=new CancellationTokenSource(TimeSpan.FromMinutes(5));
+    using var cts=new CancellationTokenSource(TimeSpan.FromMinutes(15));
     try { await proc.WaitForExitAsync(cts.Token); }
-    catch (OperationCanceledException) { proc.Kill(entireProcessTree:true); throw new TimeoutException("FFmpeg xử lý quá 5 phút."); }
+    catch (OperationCanceledException) { proc.Kill(entireProcessTree:true); throw new TimeoutException("FFmpeg xử lý quá 15 phút."); }
     var err=await errTask; await outTask;
     if(proc.ExitCode!=0) throw new InvalidDataException("FFmpeg xử lý thất bại: "+(err.Length>400?err[^400..]:err));
 }

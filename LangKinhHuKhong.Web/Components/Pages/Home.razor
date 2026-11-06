@@ -65,7 +65,7 @@
                 <div class="desktop-greeting"><b>@NavigationHeading</b><small>@DateTime.Now.ToString("dddd, dd/MM/yyyy", new System.Globalization.CultureInfo("vi-VN"))</small></div>
             </div>
             <div class="topbar-actions">
-                <div class="searchbar"><AppIcon Name="search" Size="18" /><input aria-label="Tìm kiếm truyện" placeholder="Tìm tên truyện, tác giả..." @bind="search" @bind:event="oninput" /><a href="/thu-vien" aria-label="Xem kết quả tìm kiếm"><AppIcon Name="arrow-right" Size="17" /></a></div>
+                <div class="searchbar"><AppIcon Name="search" Size="18" /><input aria-label="Tìm kiếm truyện" placeholder="Tìm tên truyện, tác giả..." @bind="search" @bind:event="oninput" @onkeydown="HandleSearchKey" />@if (!string.IsNullOrEmpty(search)) { <button type="button" class="searchbar-clear" title="Xóa từ khóa" aria-label="Xóa từ khóa tìm kiếm" @onclick='() => search = ""'>×</button> }<a href="/thu-vien" aria-label="Xem kết quả tìm kiếm"><AppIcon Name="arrow-right" Size="17" /></a></div>
                 @if (isAuthenticated)
                 {
                     <div class="top-account"><span class="account-avatar">@Ui.Str(user,"username").FirstOrDefault()</span><div><b>@Ui.Str(user,"username")</b><small>@(isPremium ? "Premium member" : "Thành viên Free")</small></div><button class="logout-btn" title="Đăng xuất" aria-label="Đăng xuất" @onclick="Logout"><AppIcon Name="log-out" Size="19" /></button></div>
@@ -165,7 +165,12 @@
                     <section class="section story-reviews"><div class="section-heading"><div><small>THẢO LUẬN</small><h2>Đánh giá bộ truyện</h2><p>★ @Ui.Str(st,"ratingAverage") / 5 · @Ui.Num(st,"ratingCount") lượt đánh giá</p></div></div>
                         @if(isAuthenticated)
                         {
-                            <div class="panel form review-form"><h3>Đánh giá của bạn</h3><div class="rating-choices" role="group" aria-label="Chọn điểm đánh giá">
+                            <div class="panel form review-form"><h3>Đánh giá của bạn</h3>
+                                @if(myReviewHidden)
+                                {
+                                    <div class="review-hidden-notice" role="status">⚠ Đánh giá của bạn hiện đang được Quản trị viên tạm ẩn và không hiển thị công khai.</div>
+                                }
+                                <div class="rating-choices" role="group" aria-label="Chọn điểm đánh giá">
                                 @for(var score=1;score<=5;score++){var stars=score;<button class="rating-choice @(myReviewStars>=score?"chosen":"")" title="@($"{score} sao")" @onclick="() => myReviewStars=stars">★</button>}
                             </div><label>Nội dung đánh giá<textarea @bind="myReviewBody" maxlength="1200" rows="3" placeholder="Cảm nhận của bạn về bộ truyện..."></textarea></label>
                             <div class="table-actions"><button class="btn btn-primary" disabled="@busy" @onclick="SaveReview">Lưu đánh giá</button>
@@ -351,7 +356,7 @@
     private DotNetObjectReference<Home>? playerCallback;
     private string myReviewBody="";
     private int myReviewStars=5;
-    private bool hasOwnReview=false;
+    private bool hasOwnReview=false,myReviewHidden=false;
     private string profileName="",profilePhone="",profileAddress="",activePlayerId="";
     private string currentPassword="", newPassword="", confirmPassword="";
     private int planPrice=100000,planMonths=1;
@@ -504,7 +509,7 @@
             loadedRoute = route;
             UpdatePageFromUrl();
             detail = default;
-            reviews=[]; hasOwnReview=false; myReviewBody=""; myReviewStars=5;
+            reviews=[]; hasOwnReview=false; myReviewHidden=false; myReviewBody=""; myReviewStars=5;
             showFullDescription = false;
             episodes = [];
             orderDetail = default;
@@ -548,6 +553,14 @@
     }
     private void ToggleStoryDescription() => showFullDescription = !showFullDescription;
 
+    private void HandleSearchKey(KeyboardEventArgs e)
+    {
+        if (e.Key == "Enter" && page != "library")
+            Navigation.NavigateTo("/thu-vien");
+        else if (e.Key == "Escape" && !string.IsNullOrEmpty(search))
+            search = "";
+    }
+
     private async Task LoadStory(string slug)
     {
         try {detail=await Api.Get("/stories/"+Uri.EscapeDataString(slug));episodes=Ui.Array(Ui.Property(detail,"episodes"));await ReloadReviews(slug);}
@@ -564,10 +577,12 @@
         && (string.IsNullOrEmpty(search) || Ui.Str(st,"title").Contains(search,StringComparison.OrdinalIgnoreCase)||Ui.Str(st,"author").Contains(search,StringComparison.OrdinalIgnoreCase));
     private async Task ReloadReviews(string slug)
     {
-        reviews=Ui.Array(await Api.Get("/stories/"+Uri.EscapeDataString(slug)+"/reviews"));
-        var mine=reviews.FirstOrDefault(r=>Ui.Num(r,"is_mine")==1);
+        var allReviews=Ui.Array(await Api.Get("/stories/"+Uri.EscapeDataString(slug)+"/reviews"));
+        var mine=allReviews.FirstOrDefault(r=>Ui.Num(r,"is_mine")==1);
         hasOwnReview=mine.ValueKind==JsonValueKind.Object;
+        myReviewHidden=hasOwnReview && Ui.Str(mine,"status")=="Hidden";
         if(hasOwnReview){myReviewStars=Ui.Num(mine,"stars");myReviewBody=Ui.Str(mine,"body");}
+        reviews=allReviews.Where(r=>Ui.Str(r,"status")!="Hidden").ToArray();
     }
     private async Task SaveReview()
     {
@@ -576,8 +591,10 @@
         try
         {
             var slug=Ui.Str(Ui.Property(detail,"story"),"slug");
-            await Api.Put("/stories/"+Uri.EscapeDataString(slug)+"/reviews/me",new{stars=myReviewStars,body=myReviewBody});
-            await LoadStory(slug); Notice("Đã cập nhật đánh giá của bạn.");
+            var res=await Api.Put("/stories/"+Uri.EscapeDataString(slug)+"/reviews/me",new{stars=myReviewStars,body=myReviewBody});
+            await LoadStory(slug);
+            var msg=Ui.Str(res,"message");
+            Notice(string.IsNullOrWhiteSpace(msg) ? "Đã cập nhật đánh giá của bạn." : msg, Ui.Str(res,"status")=="Hidden");
         }
         catch(Exception e){Notice(e.Message,true);}finally{busy=false;}
     }
@@ -588,7 +605,7 @@
         {
             var slug=Ui.Str(Ui.Property(detail,"story"),"slug");
             await Api.Delete("/stories/"+Uri.EscapeDataString(slug)+"/reviews/me");
-            myReviewBody="";myReviewStars=5;hasOwnReview=false;
+            myReviewBody="";myReviewStars=5;hasOwnReview=false;myReviewHidden=false;
             await LoadStory(slug); Notice("Đã xóa đánh giá của bạn.");
         }
         catch(Exception e){Notice(e.Message,true);}finally{busy=false;}

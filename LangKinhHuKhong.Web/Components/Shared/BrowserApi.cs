@@ -9,7 +9,7 @@ namespace LangKinhHuKhong.Components.Shared;
 public sealed class BrowserApi(IJSRuntime js) : IAsyncDisposable
 {
     private Task<IJSObjectReference>? moduleTask;
-    private const string ModulePath = "/js/lkh-interop.js?v=1.9.4.7";
+    private const string ModulePath = "/js/lkh-interop.js?v=1.9.4.8";
 
     private async Task<IJSObjectReference> ModuleAsync()
     {
@@ -23,19 +23,28 @@ public sealed class BrowserApi(IJSRuntime js) : IAsyncDisposable
         }
     }
 
+    private static readonly TimeSpan DefaultCallTimeout = TimeSpan.FromMinutes(3);
+    private static readonly TimeSpan LongUploadTimeout = TimeSpan.FromMinutes(20);
+
     private async ValueTask<JsonElement> CallJson(string method, params object?[] args)
-        => await (await ModuleAsync()).InvokeAsync<JsonElement>(method, args);
+        => await CallJsonWithTimeout(method, DefaultCallTimeout, args);
+
+    private async ValueTask<JsonElement> CallJsonWithTimeout(string method, TimeSpan timeout, params object?[] args)
+    {
+        using var cts = new CancellationTokenSource(timeout);
+        return await (await ModuleAsync()).InvokeAsync<JsonElement>(method, cts.Token, args);
+    }
 
     private async ValueTask CallVoid(string method, params object?[] args)
         => await (await ModuleAsync()).InvokeVoidAsync(method, args);
 
     public ValueTask<JsonElement> Get(string path) => CallJson("api", path, "GET", null);
-    public ValueTask<JsonElement> Post(string path, object? model = null) => CallJson("api", path, "POST", model);
-    public ValueTask<JsonElement> Put(string path, object model) => CallJson("api", path, "PUT", model);
+    public ValueTask<JsonElement> Post(string path, object? model = null) => CallJsonWithTimeout("api", LongUploadTimeout, path, "POST", model);
+    public ValueTask<JsonElement> Put(string path, object model) => CallJsonWithTimeout("api", LongUploadTimeout, path, "PUT", model);
     public ValueTask<JsonElement> Delete(string path) => CallJson("api", path, "DELETE", null);
-    public ValueTask<JsonElement> ReplaceAudio(string episodeId) => CallJson("replaceEpisodeAudio", episodeId);
-    public ValueTask<JsonElement> Upload(string storyId, string title, int number) => CallJson("uploadEpisode", storyId, title, number);
-    public ValueTask<JsonElement> UploadCover(string storyId) => CallJson("uploadCover", storyId);
+    public ValueTask<JsonElement> ReplaceAudio(string episodeId) => CallJsonWithTimeout("replaceEpisodeAudio", LongUploadTimeout, episodeId);
+    public ValueTask<JsonElement> Upload(string storyId, string title, int number) => CallJsonWithTimeout("uploadEpisode", LongUploadTimeout, storyId, title, number);
+    public ValueTask<JsonElement> UploadCover(string storyId) => CallJsonWithTimeout("uploadCover", LongUploadTimeout, storyId);
     public ValueTask Listen(string episodeId) => CallVoid("listen", episodeId);
     public ValueTask StopAudio() => CallVoid("stopAudio");
     public ValueTask BindAutoNext(object? receiver) => CallVoid("bindAutoNext", receiver);

@@ -362,17 +362,77 @@
         }
     }
     // Verify the new record is actually visible after upload, rather than showing a false success.
-    private async Task<bool> ConfirmEpisodeVisible(string storyId, string episodeId)
+    private async Task<bool> ConfirmEpisodeVisible(string storyId, string episodeId, int episodeNum = 0)
     {
-        if (string.IsNullOrWhiteSpace(episodeId)) return false;
-        for (var attempt=0; attempt<3; attempt++)
+        for (var attempt=0; attempt<4; attempt++)
         {
             if (storyId!=activeStoryId) return false;
-            if (await LoadEpisodes(false) && episodeRows.Any(ep=>Ui.Str(ep,"id")==episodeId)) return true;
-            if (attempt<2) await Task.Delay(350);
+            if (await LoadEpisodes(false) && episodeRows.Any(ep =>
+                (!string.IsNullOrWhiteSpace(episodeId) && Ui.Str(ep,"id")==episodeId) ||
+                (episodeNum > 0 && Ui.Num(ep,"episode_number")==episodeNum)))
+                return true;
+            if (attempt<3) await Task.Delay(400);
         }
         return false;
     }
+
+    // Check server + Cloudflare R2 status before reporting success or failure to the user.
+    // If a reverse proxy or browser connection times out on a 30-120 minute MP3 while FFmpeg/R2
+    // is still running on the server, this waits until the server finishes and verifies R2 objects.
+    private async Task<(bool Verified, string EpisodeId, string StorageMode, string Detail, string ServerError)> VerifyCloudflareAndSyncEpisodeAsync(
+        string storyId, int targetNumber, string episodeId)
+    {
+        var lastErr = "";
+        for (var poll = 0; poll < 180; poll++)
+        {
+            if (storyId != activeStoryId) return (false, "", "", "", "");
+            try
+            {
+                var url = $"/admin/stories/{Uri.EscapeDataString(storyId)}/episodes/upload-status?episodeNumber={targetNumber}" +
+                          (string.IsNullOrWhiteSpace(episodeId) ? "" : $"&episodeId={Uri.EscapeDataString(episodeId)}");
+                var status = await Api.Get(url);
+                var inProgress = status.TryGetProperty("inProgress", out var ip) && ip.ValueKind == JsonValueKind.True;
+                if (inProgress)
+                {
+                    var stage = Ui.Str(status, "stage");
+                    var elapsed = Ui.Num(status, "elapsedSeconds");
+                    uploadStatus = $"{(stage != "" ? stage : "Đang xử lý file MP3 dài trên máy chủ...")} ({elapsed}s) — Vui lòng không tắt trang...";
+                    await InvokeAsync(StateHasChanged);
+                    await Task.Delay(2000);
+                    continue;
+                }
+
+                var exists = status.TryGetProperty("exists", out var ex) && ex.ValueKind == JsonValueKind.True;
+                var r2Verified = status.TryGetProperty("r2Verified", out var rv) && rv.ValueKind == JsonValueKind.True;
+                var resolvedId = Ui.Str(status, "id");
+                if (resolvedId == "") resolvedId = episodeId;
+                var storageMode = Ui.Str(status, "storage");
+                var detail = Ui.Str(status, "detail");
+                var srvErr = Ui.Str(status, "lastError");
+                if (srvErr != "") lastErr = srvErr;
+
+                if (exists && r2Verified)
+                {
+                    uploadStatus = "Đã xác nhận file trên Cloudflare R2. Đang đồng bộ danh sách tập...";
+                    await InvokeAsync(StateHasChanged);
+                    await ConfirmEpisodeVisible(storyId, resolvedId, targetNumber);
+                    return (true, resolvedId, storageMode, detail, "");
+                }
+
+                if (!exists && lastErr != "")
+                    return (false, "", storageMode, detail, lastErr);
+            }
+            catch
+            {
+                // Transient network blip during long upload check; retry shortly.
+            }
+
+            if (poll >= 2) break;
+            await Task.Delay(1200);
+        }
+        return (false, "", "", "", lastErr);
+    }
+
     private async Task UploadCover()
     {
         if(activeStoryId==""){Notify("Hãy chọn bộ truyện.",true);return;}
@@ -405,25 +465,32 @@
         if (busy) return;
         if (activeStoryId=="") { Notify("Chưa chọn bộ truyện.",true); return; }
         var storyId=activeStoryId;
+        var targetNumber=episodeNumber;
         busy=true;
         uploadingAudio=true;
         uploadStatus="Đang tải MP3 và xử lý Preview / HLS trên máy chủ...";
         await InvokeAsync(StateHasChanged);
         try
         {
-            // This request returns ONLY after the server finishes FFmpeg, R2 and SQLite INSERT.
-            var created=await Api.Upload(storyId,episodeTitle,episodeNumber);
+            // This request returns after the server finishes FFmpeg, R2 and SQLite INSERT.
+            var created=await Api.Upload(storyId,episodeTitle,targetNumber);
             var episodeId=Ui.Str(created,"id");
-            episodeNumber++;
-            episodeTitle="";
-            uploadStatus="Đã lưu MP3. Đang đồng bộ danh sách tập...";
+            uploadStatus="Đang kiểm tra trạng thái MP3 & HLS trên Cloudflare R2...";
             await InvokeAsync(StateHasChanged);
 
-            var visible=await ConfirmEpisodeVisible(storyId,episodeId);
-            if (visible)
+            var check = await VerifyCloudflareAndSyncEpisodeAsync(storyId, targetNumber, episodeId);
+            episodeNumber = Math.Max(episodeNumber, targetNumber + 1);
+            episodeTitle = "";
+            if (check.Verified)
             {
-                lastUploadedEpisodeId=episodeId;
-                try { stats=await Api.Get("/admin/stats"); } catch { /* Statistics are noncritical; episode list is already refreshed. */ }
+                lastUploadedEpisodeId = check.EpisodeId != "" ? check.EpisodeId : episodeId;
+                try { stats=await Api.Get("/admin/stats"); storageInfo=await Api.Get("/admin/storage"); } catch { }
+                Notify($"Upload hoàn tất! Đã kiểm tra trạng thái {check.StorageMode} ({check.Detail}) và hiển thị tập {targetNumber} trong danh sách.");
+            }
+            else if (await ConfirmEpisodeVisible(storyId, episodeId, targetNumber))
+            {
+                lastUploadedEpisodeId = episodeId;
+                try { stats=await Api.Get("/admin/stats"); } catch { }
                 Notify("Upload hoàn tất. Tập mới đã xuất hiện trong danh sách, Preview và HLS Premium đã sẵn sàng.");
             }
             else
@@ -434,6 +501,31 @@
         }
         catch(Exception e)
         {
+            // Before reporting an error to the user (especially on 30+ minute MP3s where proxy/connection
+            // may time out while FFmpeg/R2 is still finishing), check server & Cloudflare R2 status first.
+            var clientPrecheckError = e.Message.Contains("Hãy chọn file MP3", StringComparison.OrdinalIgnoreCase) ||
+                                      e.Message.Contains("tối đa 250MB", StringComparison.OrdinalIgnoreCase) ||
+                                      e.Message.Contains("không hợp lệ", StringComparison.OrdinalIgnoreCase);
+            if (!clientPrecheckError)
+            {
+                uploadStatus="Kết nối gián đoạn hoặc tập dài đang xử lý. Đang kiểm tra trạng thái trên Cloudflare R2...";
+                await InvokeAsync(StateHasChanged);
+                var check = await VerifyCloudflareAndSyncEpisodeAsync(storyId, targetNumber, "");
+                if (check.Verified)
+                {
+                    episodeNumber = Math.Max(episodeNumber, targetNumber + 1);
+                    episodeTitle = "";
+                    lastUploadedEpisodeId = check.EpisodeId;
+                    try { stats=await Api.Get("/admin/stats"); storageInfo=await Api.Get("/admin/storage"); } catch { }
+                    Notify($"Upload hoàn tất! Tập {targetNumber} đã được xác nhận đầy đủ trên {check.StorageMode} ({check.Detail}) và đồng bộ vào danh sách.");
+                    return;
+                }
+                if (!string.IsNullOrWhiteSpace(check.ServerError))
+                {
+                    Notify("Upload MP3 thất bại (đã kiểm tra Cloudflare R2): " + check.ServerError, true);
+                    return;
+                }
+            }
             Notify("Upload MP3 thất bại: "+e.Message,true);
         }
         finally
@@ -480,15 +572,47 @@
     private async Task ReplaceAudio()
     {
         if(editEpisodeId=="")return;
+        var storyId=activeStoryId;
+        var epId=editEpisodeId;
+        var epNum=editEpisodeNumber;
         busy=true;
+        uploadingAudio=true;
+        uploadStatus="Đang thay thế MP3 và tải lên Cloudflare R2...";
+        await InvokeAsync(StateHasChanged);
         try
         {
-            await Api.ReplaceAudio(editEpisodeId);await LoadEpisodes();
+            await Api.ReplaceAudio(epId);
+            uploadStatus="Đang kiểm tra trạng thái file mới trên Cloudflare R2...";
+            await InvokeAsync(StateHasChanged);
+            var check = await VerifyCloudflareAndSyncEpisodeAsync(storyId, epNum, epId);
+            await LoadEpisodes();
             storageInfo=await Api.Get("/admin/storage");
-            Notify("Đã thay MP3, cập nhật thời lượng và tạo lại preview. Audio cũ đã được đưa vào hàng đợi dọn.");
+            if (check.Verified)
+                Notify($"Đã thay MP3, xác nhận đầy đủ trên {check.StorageMode} ({check.Detail}) và cập nhật thời lượng.");
+            else
+                Notify("Đã thay MP3, cập nhật thời lượng và tạo lại preview. Audio cũ đã được đưa vào hàng đợi dọn.");
         }
-        catch(Exception e){Notify(e.Message,true);}
-        finally{busy=false;}
+        catch(Exception e)
+        {
+            uploadStatus="Đang kiểm tra trạng thái file thay thế trên Cloudflare R2...";
+            await InvokeAsync(StateHasChanged);
+            var check = await VerifyCloudflareAndSyncEpisodeAsync(storyId, epNum, epId);
+            if (check.Verified)
+            {
+                await LoadEpisodes();
+                try { storageInfo=await Api.Get("/admin/storage"); } catch { }
+                Notify($"Đã thay MP3 thành công! Đã xác nhận file mới trên {check.StorageMode} ({check.Detail}).");
+                return;
+            }
+            Notify(check.ServerError != "" ? check.ServerError : e.Message,true);
+        }
+        finally
+        {
+            busy=false;
+            uploadingAudio=false;
+            uploadStatus="";
+            await InvokeAsync(StateHasChanged);
+        }
     }
     private async Task DeleteEpisode()
     {

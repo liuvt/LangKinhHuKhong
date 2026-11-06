@@ -262,6 +262,29 @@ window.lkh = (() => {
     if (activeHls) { activeHls.destroy(); activeHls = null; }
     if (activeAudio) { activeAudio.pause(); activeAudio.removeAttribute('src'); activeAudio.load(); activeAudio = null; }
   }
+  const reconnectModal = document.getElementById('components-reconnect-modal');
+  function isPlayingAudio() {
+    return Boolean(activeAudio && !activeAudio.paused && !activeAudio.ended);
+  }
+  function silentReconnect() {
+    if (!reconnectModal) return;
+    if (reconnectModal.classList.contains('components-reconnect-failed')) {
+      window.Blazor?.reconnect?.();
+    } else if (reconnectModal.classList.contains('components-reconnect-rejected') && !isPlayingAudio()) {
+      window.location.reload();
+    }
+  }
+  reconnectModal?.addEventListener('components-reconnect-state-changed', event => {
+    const state = event?.detail?.state;
+    if (state === 'failed') {
+      setTimeout(() => window.Blazor?.reconnect?.(), 1500);
+    } else if (state === 'rejected' && !isPlayingAudio() && document.visibilityState === 'visible') {
+      window.location.reload();
+    }
+  });
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') silentReconnect();
+  });
   return { api: send, uploadEpisode, uploadCover, replaceEpisodeAudio, listen, stopAudio, bindAutoNext };
 })();
 window.lkh.reload = () => window.location.reload();

@@ -10,11 +10,12 @@
     <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png" />
     <title>Nghe Truyện Audio Online | Lăng Kính Hư Không</title>
     <link rel="stylesheet" href="css/tailwind.generated.css?v=1.8.0" />
-    <link rel="stylesheet" href="css/site.css?v=1.9.4.5" />
+    <link rel="stylesheet" href="css/site.css?v=1.9.4.8" />
     <HeadOutlet @rendermode="InteractiveServer" />
 </head>
 <body>
     <Routes @rendermode="InteractiveServer" />
+    <div id="components-reconnect-modal" aria-hidden="true"></div>
     <!-- BrowserApi imports /js/lkh-interop.js as a JS module on first use.
          Do not also load site.js as a classic script: it would initialize twice. -->
     <script src="_framework/blazor.web.js"></script>
