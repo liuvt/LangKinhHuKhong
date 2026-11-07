@@ -179,13 +179,30 @@ public sealed class AudioStorage : IDisposable
         {
             ".png" => "image/png", ".webp" => "image/webp", _ => "image/jpeg"
         }, ct);
+        try
+        {
+            var cacheDir = Path.Combine(database.DataRoot, "covers-r2-cache");
+            Directory.CreateDirectory(cacheDir);
+            File.Copy(filePath, Path.Combine(cacheDir, fileName), overwrite: true);
+        }
+        catch { }
         return "r2:" + key;
     }
 
-    public async Task StreamCoverAsync(HttpContext context, string reference)
+    public async Task StreamCoverAsync(HttpContext context, string reference, bool isPublicPublished = false)
     {
-        context.Response.Headers.CacheControl = "private, no-store";
+        var fileTag = Path.GetFileName(reference);
+        var etag = $"\"{fileTag}\"";
+        context.Response.Headers.CacheControl = isPublicPublished
+            ? "public, max-age=3600, stale-while-revalidate=86400"
+            : "private, no-store";
+        context.Response.Headers.ETag = etag;
         context.Response.Headers["X-Content-Type-Options"] = "nosniff";
+        if (isPublicPublished && context.Request.Headers.IfNoneMatch.ToString().Contains(etag, StringComparison.Ordinal))
+        {
+            context.Response.StatusCode = StatusCodes.Status304NotModified;
+            return;
+        }
         var ext = Path.GetExtension(reference).ToLowerInvariant();
         string contentType = ext switch
         {
@@ -203,12 +220,40 @@ public sealed class AudioStorage : IDisposable
         }
         if (!reference.StartsWith("r2:", StringComparison.Ordinal) || s3 is null ||
             !Regex.IsMatch(reference[3..], R2CoverPattern)) { context.Response.StatusCode = 404; return; }
+        var cacheDir = Path.Combine(database.DataRoot, "covers-r2-cache");
+        var cachedPath = Regex.IsMatch(fileTag, @"^cover-[a-f0-9]{32}\.(png|jpg|webp)$")
+            ? Path.Combine(cacheDir, fileTag)
+            : "";
+        if (cachedPath != "" && File.Exists(cachedPath))
+        {
+            await Results.File(path: cachedPath, contentType: contentType).ExecuteAsync(context);
+            return;
+        }
         try
         {
             using var obj = await s3.GetObjectAsync(bucket, reference[3..], context.RequestAborted);
             context.Response.ContentType = contentType;
             context.Response.ContentLength = obj.ContentLength;
             if (HttpMethods.IsHead(context.Request.Method)) return;
+            if (cachedPath != "" && obj.ContentLength is > 0 and <= 8L * 1024 * 1024)
+            {
+                try
+                {
+                    Directory.CreateDirectory(cacheDir);
+                    var tmpCache = Path.Combine(cacheDir, fileTag + "." + Guid.NewGuid().ToString("N") + ".tmp");
+                    await using (var fs = new FileStream(tmpCache, FileMode.CreateNew, FileAccess.Write, FileShare.None, 65536, true))
+                    {
+                        await obj.ResponseStream.CopyToAsync(fs, context.RequestAborted);
+                    }
+                    File.Move(tmpCache, cachedPath, overwrite: true);
+                    await Results.File(path: cachedPath, contentType: contentType).ExecuteAsync(context);
+                    return;
+                }
+                catch when (!context.Response.HasStarted)
+                {
+                    // Fall back to direct streaming if disk cache write fails
+                }
+            }
             await obj.ResponseStream.CopyToAsync(context.Response.Body, context.RequestAborted);
         }
         catch (AmazonS3Exception ex) when (ex.StatusCode == HttpStatusCode.NotFound || ex.ErrorCode == "NoSuchKey")
@@ -417,6 +462,12 @@ public sealed class AudioStorage : IDisposable
                 throw new InvalidDataException("Đường dẫn R2 không hợp lệ.");
             if (s3 is null) throw new InvalidOperationException("Cần bật R2 để xóa object cũ.");
             await s3.DeleteObjectAsync(new DeleteObjectRequest { BucketName = bucket, Key = reference[3..] }, ct);
+            var fileTag = Path.GetFileName(reference[3..]);
+            if (Regex.IsMatch(fileTag, @"^cover-[a-f0-9]{32}\.(png|jpg|webp)$"))
+            {
+                var cached = Path.Combine(database.DataRoot, "covers-r2-cache", fileTag);
+                if (File.Exists(cached)) File.Delete(cached);
+            }
             return;
         }
         if (reference.StartsWith("cover-local:", StringComparison.Ordinal))

@@ -825,22 +825,52 @@
         loading=true;
         try
         {
-            stats=await Api.Get("/admin/stats");
-            storageInfo=await Api.Get("/admin/storage");
-            storyRows=Ui.Array(await Api.Get("/admin/stories"));
-            allTextFileRows=Ui.Array(await Api.Get("/admin/texts"));
-            try { gdriveStatus = await Api.Get("/admin/gdrive/status"); gdriveRootFolderInput = Ui.Str(gdriveStatus, "rootFolderName") != "" ? Ui.Str(gdriveStatus, "rootFolderName") : "LangKinhHuKhong-BanThao"; } catch { }
-            genreRows=Ui.Array(await Api.Get("/admin/genres"));
-            reviewRows=Ui.Array(await Api.Get("/admin/reviews"));
-            userRows=Ui.Array(await Api.Get("/admin/users"));
-            orderRows=Ui.Array(await Api.Get("/admin/orders"));
-            auditRows=Ui.Array(await Api.Get("/admin/audit"));
-            var p=Ui.Array(await Api.Get("/admin/plans")).FirstOrDefault();
-            if(p.ValueKind==JsonValueKind.Object) premiumPrice=Ui.Num(p,"price_vnd");
-            if(activeStoryId!="") await LoadEpisodes();
+            var statsTask = Api.Get("/admin/stats").AsTask();
+            var storageTask = Api.Get("/admin/storage").AsTask();
+            var storiesTask = Api.Get("/admin/stories").AsTask();
+            var genresTask = Api.Get("/admin/genres").AsTask();
+            var plansTask = Api.Get("/admin/plans").AsTask();
+            var gdriveTask = SafeGetGdriveStatusAsync();
+
+            await Task.WhenAll(statsTask, storageTask, storiesTask, genresTask, plansTask, gdriveTask);
+
+            stats = await statsTask;
+            storageInfo = await storageTask;
+            storyRows = Ui.Array(await storiesTask);
+            genreRows = Ui.Array(await genresTask);
+            var p = Ui.Array(await plansTask).FirstOrDefault();
+            if (p.ValueKind == JsonValueKind.Object) premiumPrice = Ui.Num(p, "price_vnd");
+
+            // Unlock the primary Admin UI immediately while secondary tabs load in parallel.
+            loading = false;
+            StateHasChanged();
+
+            var textsTask = Api.Get("/admin/texts").AsTask();
+            var reviewsTask = Api.Get("/admin/reviews").AsTask();
+            var usersTask = Api.Get("/admin/users").AsTask();
+            var ordersTask = Api.Get("/admin/orders").AsTask();
+            var auditTask = Api.Get("/admin/audit").AsTask();
+            var epTask = activeStoryId != "" ? LoadEpisodes() : Task.FromResult(true);
+
+            await Task.WhenAll(textsTask, reviewsTask, usersTask, ordersTask, auditTask, epTask);
+
+            allTextFileRows = Ui.Array(await textsTask);
+            reviewRows = Ui.Array(await reviewsTask);
+            userRows = Ui.Array(await usersTask);
+            orderRows = Ui.Array(await ordersTask);
+            auditRows = Ui.Array(await auditTask);
         }
         catch(Exception e){Notify(e.Message,true);}
         finally{loading=false;}
+    }
+    private async Task SafeGetGdriveStatusAsync()
+    {
+        try
+        {
+            gdriveStatus = await Api.Get("/admin/gdrive/status");
+            gdriveRootFolderInput = Ui.Str(gdriveStatus, "rootFolderName") != "" ? Ui.Str(gdriveStatus, "rootFolderName") : "LangKinhHuKhong-BanThao";
+        }
+        catch { }
     }
     private void Notify(string text,bool error=false){message=text;failed=error;}
     private void NewStory(){editingStoryId="";story=new();}
@@ -929,8 +959,11 @@
         }
         try
         {
-            var fresh=Ui.Array(await Api.Get("/admin/stories/"+Uri.EscapeDataString(storyId)+"/episodes"));
-            var freshTexts=Ui.Array(await Api.Get("/admin/stories/"+Uri.EscapeDataString(storyId)+"/texts"));
+            var epsTask = Api.Get("/admin/stories/" + Uri.EscapeDataString(storyId) + "/episodes").AsTask();
+            var textsTask = Api.Get("/admin/stories/" + Uri.EscapeDataString(storyId) + "/texts").AsTask();
+            await Task.WhenAll(epsTask, textsTask);
+            var fresh = Ui.Array(await epsTask);
+            var freshTexts = Ui.Array(await textsTask);
             if (storyId!=activeStoryId) return false;
             episodeRows=fresh;
             textFileRows=freshTexts;

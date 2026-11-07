@@ -1,14 +1,24 @@
 // Browser-only transports: the UI is rendered by Blazor Server, not by JS.
 window.lkh = (() => {
   let csrf = null;
-  async function token() {
-    if (csrf) return csrf;
-    const res = await fetch('/api/auth/csrf', { credentials: 'same-origin', cache: 'no-store' });
-    if (!res.ok) throw new Error('Không lấy được CSRF token.');
-    csrf = (await res.json()).token;
-    return csrf;
+  let csrfPromise = null;
+  async function token(force = false) {
+    if (!force && csrf) return csrf;
+    if (!force && csrfPromise) return csrfPromise;
+    csrfPromise = (async () => {
+      try {
+        const res = await fetch('/api/auth/csrf', { credentials: 'same-origin', cache: 'no-store' });
+        if (!res.ok) throw new Error('Không lấy được CSRF token.');
+        csrf = (await res.json()).token;
+        return csrf;
+      } finally {
+        csrfPromise = null;
+      }
+    })();
+    return csrfPromise;
   }
-  async function send(path, method = 'GET', body = null) {
+  setTimeout(() => { token().catch(() => {}); }, 0);
+  async function send(path, method = 'GET', body = null, retried = false) {
     const mutation = !['GET', 'HEAD'].includes(method);
     const headers = { 'Accept': 'application/json' };
     if (mutation) headers['X-CSRF-TOKEN'] = await token();
@@ -23,10 +33,16 @@ window.lkh = (() => {
     const type = response.headers.get('content-type') || '';
     const result = type.includes('json') ? await response.json() : {};
     if (!response.ok) {
-      if (response.status === 400 && result.error?.includes('CSRF')) csrf = null;
+      if (response.status === 400 && result.error?.includes('CSRF')) {
+        csrf = null;
+        if (!retried && mutation) return await send(path, method, body, true);
+      }
       throw new Error(result.error || `Yêu cầu thất bại (HTTP ${response.status})`);
     }
-    if (path === '/auth/login' || path === '/auth/logout') csrf = null;
+    if (path === '/auth/login' || path === '/auth/logout') {
+      csrf = null;
+      setTimeout(() => { token(true).catch(() => {}); }, 0);
+    }
     return result;
   }
   async function uploadEpisode(storyId, title, number) {

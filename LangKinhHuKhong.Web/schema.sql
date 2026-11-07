@@ -40,6 +40,9 @@ CREATE TABLE IF NOT EXISTS episodes (
  UNIQUE(story_id, episode_number)
 );
 CREATE INDEX IF NOT EXISTS ix_episodes_story ON episodes(story_id,episode_number);
+CREATE INDEX IF NOT EXISTS ix_episodes_story_status ON episodes(story_id,status,episode_number);
+CREATE INDEX IF NOT EXISTS ix_stories_status_created ON stories(status,created_at DESC);
+CREATE INDEX IF NOT EXISTS ix_stories_status_updated ON stories(status,updated_at DESC);
 CREATE TABLE IF NOT EXISTS subscription_plans (
  id TEXT PRIMARY KEY,
  code TEXT NOT NULL UNIQUE,
@@ -99,6 +102,7 @@ CREATE TABLE IF NOT EXISTS orders (
  premium_end_at TEXT
 );
 CREATE INDEX IF NOT EXISTS ix_orders_user ON orders(user_id,created_at DESC);
+CREATE INDEX IF NOT EXISTS ix_orders_status_expires ON orders(status,order_type,expires_at);
 CREATE TABLE IF NOT EXISTS payments (
  id TEXT PRIMARY KEY,
  order_id TEXT NOT NULL UNIQUE REFERENCES orders(id),
@@ -126,6 +130,7 @@ CREATE TABLE IF NOT EXISTS listening_progress (
  updated_at TEXT NOT NULL,
  PRIMARY KEY(user_id,episode_id)
 );
+CREATE INDEX IF NOT EXISTS ix_listening_user_updated ON listening_progress(user_id,updated_at DESC);
 CREATE TABLE IF NOT EXISTS audit_logs (
  id TEXT PRIMARY KEY,
  actor_id TEXT,

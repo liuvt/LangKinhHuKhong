@@ -26,7 +26,7 @@ public sealed class Database(IWebHostEnvironment environment)
         var db = new SqliteConnection(ConnectionString);
         await db.OpenAsync();
         await using var pragma = db.CreateCommand();
-        pragma.CommandText = "PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 15000;";
+        pragma.CommandText = "PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 15000; PRAGMA synchronous = NORMAL; PRAGMA temp_store = MEMORY; PRAGMA cache_size = -20000;";
         await pragma.ExecuteNonQueryAsync();
         return db;
     }

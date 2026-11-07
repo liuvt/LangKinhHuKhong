@@ -100,6 +100,11 @@ app.UseForwardedHeaders(new ForwardedHeadersOptions
     ForwardedHeaders = ForwardedHeaders.XForwardedFor | ForwardedHeaders.XForwardedProto
 });
 var database = app.Services.GetRequiredService<Database>();
+var memoryCache = app.Services.GetRequiredService<IMemoryCache>();
+void InvalidateUserAuthCache(string userId)
+{
+    if (!string.IsNullOrEmpty(userId)) memoryCache.Remove("auth-stamp:" + userId);
+}
 // Validate Cloudflare R2 configuration on startup when R2 mode is enabled.
 _ = app.Services.GetRequiredService<AudioStorage>();
 await database.InitializeAsync();
@@ -151,12 +156,22 @@ app.Use(async (ctx, next) =>
     // Cookie role alone is not enough: always re-check user status, current role and password stamp.
     if (ctx.Request.Path.StartsWithSegments("/api") && ctx.User.Identity?.IsAuthenticated == true)
     {
-        await using var db = await database.OpenAsync();
-        var u = await db.FirstAsync("SELECT id,role,status,password_hash FROM users WHERE id=@id", ("@id", Helpers.UserId(ctx.User)));
-        var pver = ctx.User.FindFirst("pver")?.Value;
-        var invalidStamp = pver is not null && u is not null && pver != Helpers.PasswordStamp(u.S("password_hash"));
-        if (u is null || u.S("status") != "Active" || u.S("role") != (Helpers.IsAdmin(ctx.User) ? "Admin" : "User") || invalidStamp)
+        var uid = Helpers.UserId(ctx.User);
+        if (!memoryCache.TryGetValue("auth-stamp:" + uid, out (string Status, string Role, string Stamp) authState))
         {
+            await using var db = await database.OpenAsync();
+            var u = await db.FirstAsync("SELECT id,role,status,password_hash FROM users WHERE id=@id", ("@id", uid));
+            if (u is not null)
+            {
+                authState = (u.S("status"), u.S("role"), Helpers.PasswordStamp(u.S("password_hash")));
+                memoryCache.Set("auth-stamp:" + uid, authState, TimeSpan.FromSeconds(20));
+            }
+        }
+        var pver = ctx.User.FindFirst("pver")?.Value;
+        var invalidStamp = pver is not null && !string.IsNullOrEmpty(authState.Stamp) && pver != authState.Stamp;
+        if (string.IsNullOrEmpty(authState.Status) || authState.Status != "Active" || authState.Role != (Helpers.IsAdmin(ctx.User) ? "Admin" : "User") || invalidStamp)
+        {
+            InvalidateUserAuthCache(uid);
             await ctx.SignOutAsync(CookieAuthenticationDefaults.AuthenticationScheme);
             ctx.Response.StatusCode = 401;
             await ctx.Response.WriteAsJsonAsync(new { error = "Phiên đăng nhập không còn hiệu lực." });
@@ -222,17 +237,19 @@ app.MapPost("/api/auth/login", async Task<IResult> (LoginReq req, HttpContext ct
         currentHash = hasher.HashPassword(identity, req.Password!);
         await db.ExecAsync("UPDATE users SET password_hash=@hash,updated_at=@at WHERE id=@id", ("@hash", currentHash), ("@at", Helpers.Now()), ("@id", identity.Id));
     }
+    var pverStamp = Helpers.PasswordStamp(currentHash);
+    memoryCache.Set("auth-stamp:" + identity.Id, (u.S("status"), u.S("role"), pverStamp), TimeSpan.FromSeconds(20));
     var claims = new[]
     {
         new Claim("uid", identity.Id),
         new Claim(ClaimTypes.Name, identity.Username),
         new Claim(ClaimTypes.Role, u.S("role")),
-        new Claim("pver", Helpers.PasswordStamp(currentHash))
+        new Claim("pver", pverStamp)
     };
     await ctx.SignInAsync(CookieAuthenticationDefaults.AuthenticationScheme, new ClaimsPrincipal(new ClaimsIdentity(claims, CookieAuthenticationDefaults.AuthenticationScheme)));
     return Results.Ok(new { user = Helpers.SafeUser(u, await Helpers.PremiumUntil(db, identity.Id)) });
 }).RequireRateLimiting("auth");
-app.MapPost("/api/auth/logout", async Task<IResult> (HttpContext ctx) => { await ctx.SignOutAsync(); return Results.Ok(new { message = "Đã đăng xuất" }); }).RequireAuthorization();
+app.MapPost("/api/auth/logout", async Task<IResult> (HttpContext ctx) => { InvalidateUserAuthCache(Helpers.UserId(ctx.User)); await ctx.SignOutAsync(); return Results.Ok(new { message = "Đã đăng xuất" }); }).RequireAuthorization();
 app.MapGet("/api/auth/me", async Task<IResult> (HttpContext ctx, Database source) =>
 {
     await using var db = await source.OpenAsync();
@@ -266,6 +283,7 @@ app.MapPost("/api/auth/change-password", async Task<IResult> (ChangePasswordReq 
     var newHash = hasher.HashPassword(identity, req.NewPassword);
     await db.ExecAsync("UPDATE users SET password_hash=@hash,updated_at=@at WHERE id=@id",
         ("@hash", newHash), ("@at", Helpers.Now()), ("@id", identity.Id));
+    InvalidateUserAuthCache(identity.Id);
     await Helpers.Audit(db, identity.Id, "user.password_change", identity.Id, "Password rotated");
     await ctx.SignOutAsync(CookieAuthenticationDefaults.AuthenticationScheme);
     return Results.Ok(new { message = "Đã đổi mật khẩu. Vui lòng đăng nhập lại." });
@@ -287,15 +305,33 @@ app.MapGet("/api/stories", async Task<IResult> (Database source, string? q, stri
         _ => "s.updated_at DESC"
     };
     await using var db = await source.OpenAsync();
-    var rows = await db.ListAsync(@"SELECT s.id,s.slug,s.title,s.author,s.genre,s.description,s.created_at,
+    var rows = await db.ListAsync(@"
+        WITH ep_counts AS (
+            SELECT story_id, COUNT(*) AS cnt FROM episodes WHERE status='Published' GROUP BY story_id
+        ),
+        listener_counts AS (
+            SELECT story_id, COUNT(*) AS cnt FROM story_listeners WHERE qualified_at IS NOT NULL GROUP BY story_id
+        ),
+        review_stats AS (
+            SELECT story_id, COUNT(*) AS cnt, ROUND(AVG(stars),1) AS avg_stars FROM story_reviews WHERE status='Visible' GROUP BY story_id
+        ),
+        genre_list AS (
+            SELECT sg.story_id, group_concat(g.name,' | ') AS names
+            FROM story_genres sg JOIN genres g ON g.slug=sg.genre_slug GROUP BY sg.story_id
+        )
+        SELECT s.id,s.slug,s.title,s.author,s.genre,s.description,s.created_at,
         CASE WHEN s.cover_file<>'' THEN '/api/stories/' || s.id || '/cover' ELSE s.cover_url END AS cover_url,s.status,
-        COALESCE((SELECT group_concat(g.name,' | ') FROM story_genres sg JOIN genres g ON g.slug=sg.genre_slug
-            WHERE sg.story_id=s.id),'') AS genres,
-        (SELECT COUNT(*) FROM episodes e WHERE e.story_id=s.id AND e.status='Published') AS episodeCount,
-        (SELECT COUNT(*) FROM story_listeners l WHERE l.story_id=s.id AND l.qualified_at IS NOT NULL) AS listenerCount,
-        (SELECT COUNT(*) FROM story_reviews r WHERE r.story_id=s.id AND r.status='Visible') AS ratingCount,
-        COALESCE((SELECT ROUND(AVG(r.stars),1) FROM story_reviews r WHERE r.story_id=s.id AND r.status='Visible'),0) AS ratingAverage
-        FROM stories s WHERE s.status='Published' AND (@q='' OR s.title LIKE @term OR s.author LIKE @term)
+        COALESCE(gl.names,'') AS genres,
+        COALESCE(ec.cnt,0) AS episodeCount,
+        COALESCE(lc.cnt,0) AS listenerCount,
+        COALESCE(rs.cnt,0) AS ratingCount,
+        COALESCE(rs.avg_stars,0) AS ratingAverage
+        FROM stories s
+        LEFT JOIN genre_list gl ON gl.story_id=s.id
+        LEFT JOIN ep_counts ec ON ec.story_id=s.id
+        LEFT JOIN listener_counts lc ON lc.story_id=s.id
+        LEFT JOIN review_stats rs ON rs.story_id=s.id
+        WHERE s.status='Published' AND (@q='' OR s.title LIKE @term OR s.author LIKE @term)
         AND (@genre='' OR EXISTS(SELECT 1 FROM story_genres sg WHERE sg.story_id=s.id AND sg.genre_slug=@genre))
         ORDER BY " + order + " LIMIT 200",
         ("@q",q ?? ""),("@term","%"+(q ?? "")+"%"),("@genre",genre ?? ""));
@@ -360,7 +396,7 @@ app.MapMethods("/api/stories/{id}/cover", ["GET", "HEAD"], async Task (string id
     if (story is null || string.IsNullOrWhiteSpace(story.S("cover_file")) ||
         (story.S("status") != "Published" && !Helpers.IsAdmin(ctx.User)))
     { ctx.Response.StatusCode = 404; return; }
-    await storage.StreamCoverAsync(ctx, story.S("cover_file"));
+    await storage.StreamCoverAsync(ctx, story.S("cover_file"), story.S("status") == "Published");
 });
 // V1.8: plain MP3 is preview ONLY. Full MP3 cannot be downloaded through this route,
 // even with a Premium session. Free streaming deliberately uses no HLS/DRM.
@@ -529,20 +565,33 @@ var admin = app.MapGroup("/api/admin").RequireAuthorization("Admin");
 admin.MapGet("/stats", async Task<IResult> (Database source) =>
 {
     await using var db = await source.OpenAsync();
-    var users = await db.ValueAsync("SELECT COUNT(*) FROM users WHERE status='Active'");
-    var stories = await db.ValueAsync("SELECT COUNT(*) FROM stories");
-    var episodes = await db.ValueAsync("SELECT COUNT(*) FROM episodes");
-    var pending = await db.ValueAsync("SELECT COUNT(*) FROM orders WHERE status IN ('Pending','Reviewing')");
-    var income = await db.ValueAsync("SELECT COALESCE(SUM(amount_vnd),0) FROM payments");
-    var premium = await db.ValueAsync("SELECT COUNT(DISTINCT user_id) FROM subscriptions WHERE ends_at>@now",("@now",Helpers.Now()));
-    return Results.Ok(new { users, stories, episodes, pending, income, premium });
+    var row = await db.FirstAsync(@"SELECT
+        (SELECT COUNT(*) FROM users WHERE status='Active') AS users,
+        (SELECT COUNT(*) FROM stories) AS stories,
+        (SELECT COUNT(*) FROM episodes) AS episodes,
+        (SELECT COUNT(*) FROM orders WHERE status IN ('Pending','Reviewing')) AS pending,
+        (SELECT COALESCE(SUM(amount_vnd),0) FROM payments) AS income,
+        (SELECT COUNT(DISTINCT user_id) FROM subscriptions WHERE ends_at>@now) AS premium",
+        ("@now", Helpers.Now()));
+    return Results.Ok(new
+    {
+        users = row?.N("users") ?? 0,
+        stories = row?.N("stories") ?? 0,
+        episodes = row?.N("episodes") ?? 0,
+        pending = row?.N("pending") ?? 0,
+        income = row?["income"] ?? 0,
+        premium = row?.N("premium") ?? 0
+    });
 });
 admin.MapGet("/users", async Task<IResult> (Database source, string? q) =>
 {
     await using var db = await source.OpenAsync();
-    return Results.Ok(await db.ListAsync(@"SELECT u.id,u.username,u.full_name,u.phone,u.address,u.role,u.status,u.created_at,
-        (SELECT MAX(ends_at) FROM subscriptions s WHERE s.user_id=u.id) AS premiumUntil
-        FROM users u WHERE (@q='' OR u.username LIKE @term OR u.full_name LIKE @term OR u.phone LIKE @term)
+    return Results.Ok(await db.ListAsync(@"
+        WITH sub_max AS (SELECT user_id, MAX(ends_at) AS max_end FROM subscriptions GROUP BY user_id)
+        SELECT u.id,u.username,u.full_name,u.phone,u.address,u.role,u.status,u.created_at,
+        sm.max_end AS premiumUntil
+        FROM users u LEFT JOIN sub_max sm ON sm.user_id=u.id
+        WHERE (@q='' OR u.username LIKE @term OR u.full_name LIKE @term OR u.phone LIKE @term)
         ORDER BY u.created_at DESC LIMIT 200",("@q",q??""),("@term","%"+(q??"")+"%")));
 });
 admin.MapPut("/users/{id}", async Task<IResult> (string id, AdminUserReq req, HttpContext ctx, Database source) =>
@@ -556,6 +605,7 @@ admin.MapPut("/users/{id}", async Task<IResult> (string id, AdminUserReq req, Ht
     if (u.S("role") == "Admin" && id != Helpers.UserId(ctx.User)) return Bad("Không chỉnh sửa Admin khác trong phiên bản này.");
     await db.ExecAsync("UPDATE users SET full_name=@n,phone=@p,address=@a,status=@s,updated_at=@now WHERE id=@id",
         ("@n",req.FullName.Trim()),("@p",req.Phone.Trim()),("@a",req.Address.Trim()),("@s",req.Status),("@now",Helpers.Now()),("@id",id));
+    InvalidateUserAuthCache(id);
     await Helpers.Audit(db,Helpers.UserId(ctx.User),"user.update",id,$"status={req.Status}");
     return Results.Ok(new { message = "Đã cập nhật tài khoản." });
 });
@@ -596,13 +646,23 @@ admin.MapPost("/users/{id}/premium", async Task<IResult> (string id, GrantReq re
 admin.MapGet("/stories", async Task<IResult> (Database source) =>
 {
     await using var db = await source.OpenAsync();
-    return Results.Ok(await db.ListAsync(@"SELECT *,
-       CASE WHEN cover_file<>'' THEN '/api/stories/' || id || '/cover' ELSE cover_url END AS cover_image_url
-       ,COALESCE((SELECT group_concat(g.slug,'|') FROM story_genres sg JOIN genres g ON g.slug=sg.genre_slug
-           WHERE sg.story_id=stories.id),'') AS genre_keys
-       ,(SELECT COUNT(*) FROM episodes ep WHERE ep.story_id=stories.id) AS episode_count
-       ,(SELECT COUNT(*) FROM story_text_files tf WHERE tf.story_id=stories.id) AS text_count
-       FROM stories ORDER BY updated_at DESC LIMIT 300"));
+    return Results.Ok(await db.ListAsync(@"
+        WITH g_keys AS (
+            SELECT sg.story_id, group_concat(g.slug,'|') AS keys
+            FROM story_genres sg JOIN genres g ON g.slug=sg.genre_slug GROUP BY sg.story_id
+        ),
+        ep_cnt AS (SELECT story_id, COUNT(*) AS cnt FROM episodes GROUP BY story_id),
+        tf_cnt AS (SELECT story_id, COUNT(*) AS cnt FROM story_text_files GROUP BY story_id)
+        SELECT stories.*,
+        CASE WHEN stories.cover_file<>'' THEN '/api/stories/' || stories.id || '/cover' ELSE stories.cover_url END AS cover_image_url,
+        COALESCE(gk.keys,'') AS genre_keys,
+        COALESCE(ec.cnt,0) AS episode_count,
+        COALESCE(tc.cnt,0) AS text_count
+        FROM stories
+        LEFT JOIN g_keys gk ON gk.story_id=stories.id
+        LEFT JOIN ep_cnt ec ON ec.story_id=stories.id
+        LEFT JOIN tf_cnt tc ON tc.story_id=stories.id
+        ORDER BY stories.updated_at DESC LIMIT 300"));
 });
 // Admin: genre catalog. Disabling keeps existing story/category relations intact.
 admin.MapGet("/genres", async Task<IResult> (Database source) =>

@@ -345,9 +345,9 @@
 @code {
     [Parameter] public string? Slug { get; set; }
     [Parameter] public string? GenreSlug { get; set; }
-    private string page="home", loadedRoute="__initial_route_pending__", search="", genre="", sortMode="new", authMode="", username="", password="", registerName="",registerPhone="",registerAddress="",authError="",message="";
+    private string page="home", loadedRoute="__initial_route_pending__", prerenderedRoute="", search="", genre="", sortMode="new", authMode="", username="", password="", registerName="",registerPhone="",registerAddress="",authError="",message="";
     private readonly SemaphoreSlim routeGate = new(1, 1);
-    private bool loading=true,busy=false,messageIsError=false,mobileMenuOpen=false,showFullDescription=false;
+    private bool loading=true,busy=false,messageIsError=false,mobileMenuOpen=false,showFullDescription=false,catalogLoaded=false,sessionChecked=false;
     private JsonElement user,detail,playing,orderDetail;
     private JsonElement[] stories=[],newestStories=[],popularStories=[],genreCatalog=[],reviews=[],history=[],episodes=[],orders=[];
     // Giữ playlist của bộ truyện đang nghe ngay cả khi người dùng đổi trang.
@@ -402,21 +402,40 @@
         try
         {
             await using var db = await Database.OpenAsync();
-            var published = await db.ListAsync(@"SELECT s.id,s.slug,s.title,s.author,s.genre,s.description,s.created_at,s.updated_at,
+            var published = await db.ListAsync(@"
+                WITH ep_counts AS (
+                    SELECT story_id, COUNT(*) AS cnt FROM episodes WHERE status='Published' GROUP BY story_id
+                ),
+                listener_counts AS (
+                    SELECT story_id, COUNT(*) AS cnt FROM story_listeners WHERE qualified_at IS NOT NULL GROUP BY story_id
+                ),
+                review_stats AS (
+                    SELECT story_id, COUNT(*) AS cnt, ROUND(AVG(stars),1) AS avg_stars FROM story_reviews WHERE status='Visible' GROUP BY story_id
+                ),
+                genre_list AS (
+                    SELECT sg.story_id, group_concat(g.name,' | ') AS names
+                    FROM story_genres sg JOIN genres g ON g.slug=sg.genre_slug GROUP BY sg.story_id
+                )
+                SELECT s.id,s.slug,s.title,s.author,s.genre,s.description,s.created_at,s.updated_at,
                 CASE WHEN s.cover_file<>'' THEN '/api/stories/' || s.id || '/cover' ELSE s.cover_url END AS cover_url,s.status,
-                COALESCE((SELECT group_concat(g.name,' | ') FROM story_genres sg JOIN genres g ON g.slug=sg.genre_slug
-                    WHERE sg.story_id=s.id),'') AS genres,
-                (SELECT COUNT(*) FROM episodes e WHERE e.story_id=s.id AND e.status='Published') AS episodeCount,
-                (SELECT COUNT(*) FROM story_listeners l WHERE l.story_id=s.id AND l.qualified_at IS NOT NULL) AS listenerCount,
-                (SELECT COUNT(*) FROM story_reviews r WHERE r.story_id=s.id AND r.status='Visible') AS ratingCount,
-                COALESCE((SELECT ROUND(AVG(r.stars),1) FROM story_reviews r WHERE r.story_id=s.id AND r.status='Visible'),0) AS ratingAverage
-                FROM stories s WHERE s.status='Published' ORDER BY s.created_at DESC LIMIT 200");
+                COALESCE(gl.names,'') AS genres,
+                COALESCE(ec.cnt,0) AS episodeCount,
+                COALESCE(lc.cnt,0) AS listenerCount,
+                COALESCE(rs.cnt,0) AS ratingCount,
+                COALESCE(rs.avg_stars,0) AS ratingAverage
+                FROM stories s
+                LEFT JOIN genre_list gl ON gl.story_id=s.id
+                LEFT JOIN ep_counts ec ON ec.story_id=s.id
+                LEFT JOIN listener_counts lc ON lc.story_id=s.id
+                LEFT JOIN review_stats rs ON rs.story_id=s.id
+                WHERE s.status='Published' ORDER BY s.created_at DESC LIMIT 200");
             newestStories = published.Select(x => JsonSerializer.SerializeToElement(x)).ToArray();
             popularStories = published.OrderByDescending(x => x.N("listenerCount"))
                 .Select(x => JsonSerializer.SerializeToElement(x)).ToArray();
             stories = newestStories;
             genreCatalog = (await db.ListAsync("SELECT slug,name FROM genres WHERE is_active=1 ORDER BY sort_order,name"))
                 .Select(x => JsonSerializer.SerializeToElement(x)).ToArray();
+            catalogLoaded = true;
             if (page == "story")
             {
                 var route = CurrentRoute();
@@ -442,6 +461,7 @@
                     }
                 }
             }
+            prerenderedRoute = CurrentRoute();
             loading = false;
         }
         catch
@@ -508,17 +528,74 @@
             if (loadedRoute == route) return;
             loadedRoute = route;
             UpdatePageFromUrl();
+
+            // If SSR prerender already loaded the exact public route, do not wipe UI or re-query stories/genres!
+            if (prerenderedRoute == route && catalogLoaded && page is "home" or "library" or "story")
+            {
+                prerenderedRoute = "";
+                loading = false;
+                await HydrateSessionAndReviewsAsync(route);
+                StateHasChanged();
+                return;
+            }
+            prerenderedRoute = "";
+
             detail = default;
             reviews=[]; hasOwnReview=false; myReviewHidden=false; myReviewBody=""; myReviewStars=5;
             showFullDescription = false;
             episodes = [];
             orderDetail = default;
-            loading = true;
-            StateHasChanged();
+            var needsBlockingLoader = !catalogLoaded || page is "story" or "premium";
+            if (needsBlockingLoader)
+            {
+                loading = true;
+                StateHasChanged();
+            }
             await LoadPage();
             StateHasChanged();
         }
         finally { routeGate.Release(); }
+    }
+
+    private async Task HydrateSessionAndReviewsAsync(string route)
+    {
+        var authTask = EnsureAuthLoadedAsync();
+        Task? reviewsTask = null;
+        if (page == "story" && route.StartsWith("truyen/", StringComparison.OrdinalIgnoreCase))
+        {
+            var slug = Uri.UnescapeDataString(route["truyen/".Length..]);
+            reviewsTask = SafeReloadReviewsAsync(slug);
+        }
+        await authTask;
+        if (isAuthenticated)
+        {
+            try { history = Ui.Array(await Api.Get("/listening")); } catch { history = []; }
+        }
+        if (reviewsTask is not null) await reviewsTask;
+    }
+
+    private async Task EnsureAuthLoadedAsync(bool force = false)
+    {
+        if (sessionChecked && !force) return;
+        try { user = await Api.Get("/auth/me"); }
+        catch { user = default; }
+        sessionChecked = true;
+    }
+
+    private async Task EnsureCatalogLoadedAsync(bool force = false)
+    {
+        if (catalogLoaded && !force && newestStories.Length > 0 && genreCatalog.Length > 0) return;
+        var storiesTask = Api.Get("/stories?sort=new").AsTask();
+        var genresTask = Api.Get("/genres").AsTask();
+        await Task.WhenAll(storiesTask, genresTask);
+        newestStories = Ui.Array(await storiesTask);
+        popularStories = newestStories
+            .OrderByDescending(x => Ui.Num(x, "listenerCount"))
+            .ThenByDescending(x => Ui.Str(x, "created_at"))
+            .ToArray();
+        stories = newestStories;
+        genreCatalog = Ui.Array(await genresTask);
+        catalogLoaded = true;
     }
 
     public async ValueTask DisposeAsync()
@@ -532,24 +609,43 @@
 
     private async Task LoadPage()
     {
-        loading=true;
         try
         {
-            try {user=await Api.Get("/auth/me");}
-            catch {user=default;}
-            newestStories=Ui.Array(await Api.Get("/stories?sort=new"));
-            popularStories=Ui.Array(await Api.Get("/stories?sort=popular"));
-            stories=newestStories;
-            genreCatalog=Ui.Array(await Api.Get("/genres"));
-            if(isAuthenticated) { try{history=Ui.Array(await Api.Get("/listening"));}catch{history=[];} }
-            else history=[];
-            if(page=="story" && CurrentRoute().StartsWith("truyen/", StringComparison.OrdinalIgnoreCase))
-                await LoadStory(Uri.UnescapeDataString(CurrentRoute()["truyen/".Length..]));
-            if(page=="premium") await LoadPremium();
-            if(page=="account") {profileName=Ui.Str(user,"fullName");profilePhone=Ui.Str(user,"phone");profileAddress=Ui.Str(user,"address");}
+            var authTask = EnsureAuthLoadedAsync();
+            var catalogTask = EnsureCatalogLoadedAsync();
+            await Task.WhenAll(authTask, catalogTask);
+
+            var tasks = new List<Task>();
+            if (isAuthenticated && (page is "home" or "history" || history.Length == 0))
+            {
+                tasks.Add(LoadListeningSafeAsync());
+            }
+            else if (!isAuthenticated)
+            {
+                history = [];
+            }
+
+            if (page == "story" && CurrentRoute().StartsWith("truyen/", StringComparison.OrdinalIgnoreCase))
+                tasks.Add(LoadStory(Uri.UnescapeDataString(CurrentRoute()["truyen/".Length..])));
+            if (page == "premium")
+                tasks.Add(LoadPremium());
+            if (page == "account")
+            {
+                profileName = Ui.Str(user, "fullName");
+                profilePhone = Ui.Str(user, "phone");
+                profileAddress = Ui.Str(user, "address");
+            }
+
+            if (tasks.Count > 0) await Task.WhenAll(tasks);
         }
         catch(Exception e){Notice(e.Message,true);}
         finally{loading=false;}
+    }
+
+    private async Task LoadListeningSafeAsync()
+    {
+        try { history = Ui.Array(await Api.Get("/listening")); }
+        catch { history = []; }
     }
     private void ToggleStoryDescription() => showFullDescription = !showFullDescription;
 
@@ -563,15 +659,29 @@
 
     private async Task LoadStory(string slug)
     {
-        try {detail=await Api.Get("/stories/"+Uri.EscapeDataString(slug));episodes=Ui.Array(Ui.Property(detail,"episodes"));await ReloadReviews(slug);}
+        try
+        {
+            var detailTask = Api.Get("/stories/" + Uri.EscapeDataString(slug)).AsTask();
+            var reviewsTask = SafeReloadReviewsAsync(slug);
+            await Task.WhenAll(detailTask, reviewsTask);
+            detail = await detailTask;
+            episodes = Ui.Array(Ui.Property(detail, "episodes"));
+        }
         catch(Exception e){detail=default;episodes=[];Notice(e.Message,true);}
+    }
+    private async Task SafeReloadReviewsAsync(string slug)
+    {
+        try { await ReloadReviews(slug); } catch { reviews = []; }
     }
     private async Task LoadPremium()
     {
-        var plans=Ui.Array(await Api.Get("/plans"));
-        var plan=plans.FirstOrDefault(x=>Ui.Str(x,"code")=="PREMIUM");
-        if(plan.ValueKind==JsonValueKind.Object){planPrice=Ui.Num(plan,"price_vnd");planMonths=Ui.Num(plan,"duration_months");}
-        if(isAuthenticated)orders=Ui.Array(await Api.Get("/orders"));
+        var plansTask = Api.Get("/plans").AsTask();
+        var ordersTask = isAuthenticated ? Api.Get("/orders").AsTask() : Task.FromResult<JsonElement>(default);
+        await Task.WhenAll(plansTask, ordersTask);
+        var plans = Ui.Array(await plansTask);
+        var plan = plans.FirstOrDefault(x => Ui.Str(x, "code") == "PREMIUM");
+        if (plan.ValueKind == JsonValueKind.Object) { planPrice = Ui.Num(plan, "price_vnd"); planMonths = Ui.Num(plan, "duration_months"); }
+        if (isAuthenticated) orders = Ui.Array(await ordersTask);
     }
     private bool Matches(JsonElement st) => (genre==""||Ui.Str(st,"genres").Split(" | ").Any(name=>genreCatalog.Any(g=>Ui.Str(g,"slug")==genre && Ui.Str(g,"name")==name)))
         && (string.IsNullOrEmpty(search) || Ui.Str(st,"title").Contains(search,StringComparison.OrdinalIgnoreCase)||Ui.Str(st,"author").Contains(search,StringComparison.OrdinalIgnoreCase));
@@ -616,13 +726,54 @@
         busy=true;authError="";
         try
         {
-            if(authMode=="login") { await Api.Post("/auth/login",new {username,password}); await Api.Reload(); }
-            else {await Api.Post("/auth/register",new {username,password,fullName=registerName,phone=registerPhone,address=registerAddress});authMode="login";password="";Notice("Đăng ký thành công. Hãy đăng nhập.");}
+            if(authMode=="login")
+            {
+                var res = await Api.Post("/auth/login", new { username, password });
+                var loggedUser = Ui.Property(res, "user");
+                user = loggedUser.ValueKind == JsonValueKind.Object ? loggedUser : await Api.Get("/auth/me");
+                sessionChecked = true;
+                authMode = "";
+                password = "";
+                profileName = Ui.Str(user, "fullName");
+                profilePhone = Ui.Str(user, "phone");
+                profileAddress = Ui.Str(user, "address");
+                StateHasChanged();
+                var refreshTasks = new List<Task> { LoadListeningSafeAsync() };
+                if (page == "story" && CurrentRoute().StartsWith("truyen/", StringComparison.OrdinalIgnoreCase))
+                    refreshTasks.Add(SafeReloadReviewsAsync(Uri.UnescapeDataString(CurrentRoute()["truyen/".Length..])));
+                if (page == "premium")
+                    refreshTasks.Add(LoadPremium());
+                await Task.WhenAll(refreshTasks);
+            }
+            else
+            {
+                await Api.Post("/auth/register", new { username, password, fullName = registerName, phone = registerPhone, address = registerAddress });
+                authMode = "login";
+                password = "";
+                Notice("Đăng ký thành công. Hãy đăng nhập.");
+            }
         }
         catch(Exception e){authError=e.Message;}
         finally{busy=false;}
     }
-    private async Task Logout(){try{await Api.Post("/auth/logout");await Api.Reload();}catch(Exception e){Notice(e.Message,true);}}
+    private async Task Logout()
+    {
+        try
+        {
+            await Api.Post("/auth/logout");
+            user = default;
+            sessionChecked = true;
+            history = [];
+            orders = [];
+            orderDetail = default;
+            hasOwnReview = false;
+            myReviewHidden = false;
+            myReviewBody = "";
+            myReviewStars = 5;
+            if (page == "admin") Navigation.NavigateTo("/");
+        }
+        catch(Exception e){Notice(e.Message,true);}
+    }
     private async Task SaveProfile()
     {
         busy=true;
