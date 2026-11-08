@@ -6,9 +6,15 @@
 @page "/tai-khoan"
 @page "/premium"
 @page "/quan-tri"
+@using System.Security.Claims
+@using Microsoft.AspNetCore.Components.Authorization
+@using Microsoft.AspNetCore.Http
+@using Microsoft.Data.Sqlite
 @inject BrowserApi Api
 @inject Database Database
 @inject NavigationManager Navigation
+@inject AuthenticationStateProvider AuthStateProvider
+@inject IHttpContextAccessor HttpContextAccessor
 @implements IAsyncDisposable
 
 <SeoHead @key="CurrentRoute()" Route="@CurrentRoute()" />
@@ -335,11 +341,15 @@
 
 @if(authMode != "")
 {
-    <div class="overlay backdrop-blur-sm"><div class="auth-modal rounded-3xl shadow-2xl"><button class="modal-x" @onclick='() => authMode = ""'>×</button><div class="auth-heading"><span class="auth-logo"><AppIcon Name="headphones" Size="30" /></span><h2>@(authMode=="login"?"Chào mừng trở lại":"Tạo tài khoản miễn phí")</h2><p>Lăng Kính Hư Không · Audio Truyện</p></div><div class="auth-tabs"><button class="@(authMode=="login"?"chosen":"")" @onclick='() => authMode = "login"'>Đăng nhập</button><button class="@(authMode=="register"?"chosen":"")" @onclick='() => authMode = "register"'>Đăng ký</button></div>
-        <div class="form"><label>Tên đăng nhập<input @bind="username" minlength="3" maxlength="30" autocomplete="username" /></label><label>Mật khẩu<input type="password" @bind="password" maxlength="128" autocomplete="@(authMode=="login"?"current-password":"new-password")" /></label>
-        @if(authMode=="register"){<label>Họ và tên<input @bind="registerName" maxlength="100" /></label><label>Số điện thoại<input @bind="registerPhone" maxlength="25" /></label><label>Địa chỉ<textarea @bind="registerAddress" maxlength="300"></textarea></label>}
-        @if(!string.IsNullOrEmpty(authError)){<p class="error-text">@authError</p>}
-        <button class="btn btn-primary btn-wide" disabled="@busy" @onclick="SubmitAuth">@(busy ? "Đang xử lý..." : authMode=="login"?"Đăng nhập":"Tạo tài khoản Free")</button><p class="hint">Tài khoản Free nghe 5 phút đầu mỗi tập.</p></div></div></div>
+    <div class="overlay backdrop-blur-sm"><div class="auth-modal rounded-3xl shadow-2xl"><button type="button" class="modal-x" @onclick='() => authMode = ""'>×</button><div class="auth-heading"><span class="auth-logo"><AppIcon Name="headphones" Size="30" /></span><h2>@(authMode=="login"?"Chào mừng trở lại":"Tạo tài khoản miễn phí")</h2><p>Lăng Kính Hư Không · Audio Truyện</p></div><div class="auth-tabs"><button type="button" class="@(authMode=="login"?"chosen":"")" @onclick='() => authMode = "login"'>Đăng nhập</button><button type="button" class="@(authMode=="register"?"chosen":"")" @onclick='() => authMode = "register"'>Đăng ký</button></div>
+        <form class="form" @onsubmit="SubmitAuth" @onsubmit:preventDefault>
+            <label>Tên đăng nhập<input name="username" @bind="username" @bind:event="oninput" minlength="3" maxlength="30" autocomplete="username" required /></label>
+            <label>Mật khẩu<input name="password" type="password" @bind="password" @bind:event="oninput" maxlength="128" autocomplete="@(authMode=="login"?"current-password":"new-password")" required /></label>
+            @if(authMode=="register"){<label>Họ và tên<input @bind="registerName" @bind:event="oninput" maxlength="100" /></label><label>Số điện thoại<input @bind="registerPhone" @bind:event="oninput" maxlength="25" /></label><label>Địa chỉ<textarea @bind="registerAddress" @bind:event="oninput" maxlength="300"></textarea></label>}
+            @if(!string.IsNullOrEmpty(authError)){<p class="error-text">@authError</p>}
+            <button type="submit" class="btn btn-primary btn-wide" disabled="@busy">@(busy ? "Đang xử lý..." : authMode=="login"?"Đăng nhập":"Tạo tài khoản Free")</button>
+            <p class="hint">@(authMode=="login" ? "Phiên đăng nhập tự động lưu 30 ngày trên thiết bị này." : "Tài khoản Free nghe 5 phút đầu mỗi tập.")</p>
+        </form></div></div>
 }
 
 @code {
@@ -360,6 +370,7 @@
     private string profileName="",profilePhone="",profileAddress="",activePlayerId="";
     private string currentPassword="", newPassword="", confirmPassword="";
     private int planPrice=100000,planMonths=1;
+    private string CurrentUserId => Ui.Str(user, "id");
     private string GenreName
     {
         get
@@ -393,80 +404,187 @@
     }
     protected override void OnParametersSet() => UpdatePageFromUrl();
 
-    // The original app only fetches public content from JavaScript after hydration.
-    // Prerender the public catalog/story with SQLite so crawlers receive real HTML,
-    // headings, descriptions and crawlable links before executing JavaScript.
+    private async Task ResolveServerSessionAsync(SqliteConnection db)
+    {
+        ClaimsPrincipal? principal = HttpContextAccessor.HttpContext?.User;
+        if (principal?.Identity?.IsAuthenticated != true)
+        {
+            try
+            {
+                var authState = await AuthStateProvider.GetAuthenticationStateAsync();
+                principal = authState.User;
+            }
+            catch { principal = null; }
+        }
+        if (principal?.Identity?.IsAuthenticated == true)
+        {
+            var uid = Helpers.UserId(principal);
+            if (!string.IsNullOrEmpty(uid))
+            {
+                var u = await db.FirstAsync("SELECT * FROM users WHERE id=@id", ("@id", uid));
+                var pver = principal.FindFirst("pver")?.Value;
+                var stamp = u is not null ? Helpers.PasswordStamp(u.S("password_hash")) : "";
+                if (u is not null && u.S("status") == "Active" && (pver is null || pver == stamp))
+                {
+                    user = JsonSerializer.SerializeToElement(Helpers.SafeUser(u, await Helpers.PremiumUntil(db, uid)));
+                    profileName = Ui.Str(user, "fullName");
+                    profilePhone = Ui.Str(user, "phone");
+                    profileAddress = Ui.Str(user, "address");
+                    sessionChecked = true;
+                    return;
+                }
+            }
+        }
+        user = default;
+        sessionChecked = true;
+    }
+
+    private async Task LoadCatalogFromDbAsync(SqliteConnection db)
+    {
+        var published = await db.ListAsync(@"
+            WITH ep_counts AS (
+                SELECT story_id, COUNT(*) AS cnt FROM episodes WHERE status='Published' GROUP BY story_id
+            ),
+            listener_counts AS (
+                SELECT story_id, COUNT(*) AS cnt FROM story_listeners WHERE qualified_at IS NOT NULL GROUP BY story_id
+            ),
+            review_stats AS (
+                SELECT story_id, COUNT(*) AS cnt, ROUND(AVG(stars),1) AS avg_stars FROM story_reviews WHERE status='Visible' GROUP BY story_id
+            ),
+            genre_list AS (
+                SELECT sg.story_id, group_concat(g.name,' | ') AS names
+                FROM story_genres sg JOIN genres g ON g.slug=sg.genre_slug GROUP BY sg.story_id
+            )
+            SELECT s.id,s.slug,s.title,s.author,s.genre,s.description,s.created_at,s.updated_at,
+            CASE WHEN s.cover_file<>'' THEN '/api/stories/' || s.id || '/cover' ELSE s.cover_url END AS cover_url,s.status,
+            COALESCE(gl.names,'') AS genres,
+            COALESCE(ec.cnt,0) AS episodeCount,
+            COALESCE(lc.cnt,0) AS listenerCount,
+            COALESCE(rs.cnt,0) AS ratingCount,
+            COALESCE(rs.avg_stars,0) AS ratingAverage
+            FROM stories s
+            LEFT JOIN genre_list gl ON gl.story_id=s.id
+            LEFT JOIN ep_counts ec ON ec.story_id=s.id
+            LEFT JOIN listener_counts lc ON lc.story_id=s.id
+            LEFT JOIN review_stats rs ON rs.story_id=s.id
+            WHERE s.status='Published' ORDER BY s.created_at DESC LIMIT 200");
+        newestStories = published.Select(x => JsonSerializer.SerializeToElement(x)).ToArray();
+        popularStories = published.OrderByDescending(x => x.N("listenerCount"))
+            .Select(x => JsonSerializer.SerializeToElement(x)).ToArray();
+        stories = newestStories;
+        genreCatalog = (await db.ListAsync("SELECT slug,name FROM genres WHERE is_active=1 ORDER BY sort_order,name"))
+            .Select(x => JsonSerializer.SerializeToElement(x)).ToArray();
+        catalogLoaded = true;
+    }
+
+    private async Task LoadListeningFromDbAsync(SqliteConnection db)
+    {
+        if (!isAuthenticated || string.IsNullOrEmpty(CurrentUserId)) { history = []; return; }
+        var rows = await db.ListAsync(@"SELECT p.episode_id,p.seconds,p.updated_at,e.title AS episode_title,s.title AS story_title,s.slug,
+            CASE WHEN s.cover_file<>'' THEN '/api/stories/' || s.id || '/cover' ELSE s.cover_url END AS cover_url
+            FROM listening_progress p JOIN episodes e ON e.id=p.episode_id JOIN stories s ON s.id=e.story_id
+            WHERE p.user_id=@u ORDER BY p.updated_at DESC LIMIT 30", ("@u", CurrentUserId));
+        history = rows.Select(x => JsonSerializer.SerializeToElement(x)).ToArray();
+    }
+
+    private async Task LoadStoryAndReviewsFromDbAsync(SqliteConnection db, string slug)
+    {
+        var selected = await db.FirstAsync(@"SELECT s.id,s.slug,s.title,s.author,s.description,s.genre,s.created_at,s.updated_at,
+            CASE WHEN s.cover_file<>'' THEN '/api/stories/' || s.id || '/cover' ELSE s.cover_url END AS cover_url,s.status,
+            COALESCE((SELECT group_concat(g.name,' | ') FROM story_genres sg JOIN genres g ON g.slug=sg.genre_slug
+                WHERE sg.story_id=s.id),'') AS genres,
+            (SELECT COUNT(*) FROM story_listeners l WHERE l.story_id=s.id AND l.qualified_at IS NOT NULL) AS listenerCount,
+            (SELECT COUNT(*) FROM story_reviews r WHERE r.story_id=s.id AND r.status='Visible') AS ratingCount,
+            COALESCE((SELECT ROUND(AVG(r.stars),1) FROM story_reviews r WHERE r.story_id=s.id AND r.status='Visible'),0) AS ratingAverage
+            FROM stories s WHERE s.slug=@slug AND s.status='Published'", ("@slug", slug));
+        if (selected is not null)
+        {
+            var storyId = selected.S("id");
+            var list = await db.ListAsync("SELECT id,title,episode_number,duration_seconds,created_at FROM episodes WHERE story_id=@id AND status='Published' ORDER BY episode_number", ("@id", storyId));
+            detail = JsonSerializer.SerializeToElement(new { story = selected, episodes = list });
+            episodes = Ui.Array(Ui.Property(detail, "episodes"));
+            await LoadReviewsByStoryIdFromDbAsync(db, storyId);
+        }
+        else
+        {
+            detail = default;
+            episodes = [];
+            reviews = [];
+            hasOwnReview = false;
+            myReviewHidden = false;
+        }
+    }
+
+    private async Task LoadReviewsByStoryIdFromDbAsync(SqliteConnection db, string storyId)
+    {
+        var uid = isAuthenticated ? CurrentUserId : "";
+        var rows = await db.ListAsync(@"SELECT r.id,r.stars,r.body,r.status,r.updated_at,u.username,
+            CASE WHEN r.user_id=@user THEN 1 ELSE 0 END AS is_mine
+            FROM story_reviews r JOIN users u ON u.id=r.user_id
+            WHERE r.story_id=@story AND (r.status='Visible' OR (@user<>'' AND r.user_id=@user)) AND u.status='Active'
+            ORDER BY r.updated_at DESC LIMIT 100", ("@user", uid), ("@story", storyId));
+        var allReviews = rows.Select(x => JsonSerializer.SerializeToElement(x)).ToArray();
+        var mine = allReviews.FirstOrDefault(r => Ui.Num(r, "is_mine") == 1);
+        hasOwnReview = mine.ValueKind == JsonValueKind.Object;
+        myReviewHidden = hasOwnReview && Ui.Str(mine, "status") == "Hidden";
+        if (hasOwnReview) { myReviewStars = Ui.Num(mine, "stars"); myReviewBody = Ui.Str(mine, "body"); }
+        reviews = allReviews.Where(r => Ui.Str(r, "status") != "Hidden").ToArray();
+    }
+
+    private async Task LoadPremiumFromDbAsync(SqliteConnection db)
+    {
+        var plan = await db.FirstAsync("SELECT id,code,name,price_vnd,duration_months FROM subscription_plans WHERE code='PREMIUM' LIMIT 1");
+        if (plan is not null) { planPrice = plan.N("price_vnd"); planMonths = plan.N("duration_months"); }
+        if (isAuthenticated && !string.IsNullOrEmpty(CurrentUserId))
+        {
+            await db.ExecAsync("UPDATE orders SET status='Expired' WHERE order_type='Purchase' AND status='Pending' AND expires_at<=@now", ("@now", Helpers.Now()));
+            var rows = await db.ListAsync(@"SELECT o.id,o.code,o.amount_vnd,o.duration_months,o.status,o.order_type,o.grant_reason,
+                o.created_at,o.expires_at,o.paid_at,
+                COALESCE(o.premium_start_at,(SELECT starts_at FROM subscriptions WHERE order_id=o.id LIMIT 1)) AS premium_start_at,
+                COALESCE(o.premium_end_at,(SELECT ends_at FROM subscriptions WHERE order_id=o.id LIMIT 1)) AS premium_end_at,
+                COALESCE(admin.username,'') AS granted_by_name
+                FROM orders o LEFT JOIN users admin ON admin.id=o.reviewed_by
+                WHERE o.user_id=@u ORDER BY o.created_at DESC LIMIT 100", ("@u", CurrentUserId));
+            orders = rows.Select(x => JsonSerializer.SerializeToElement(x)).ToArray();
+        }
+        else
+        {
+            orders = [];
+        }
+    }
+
+    // Prerender and initialize the user session + public catalog/route directly from SQLite on the server
+    // so logged-in users and crawlers see the complete page immediately without waiting for JS round-trips.
     protected override async Task OnInitializedAsync()
     {
-        if (page is not ("home" or "library" or "story")) return;
         try
         {
             await using var db = await Database.OpenAsync();
-            var published = await db.ListAsync(@"
-                WITH ep_counts AS (
-                    SELECT story_id, COUNT(*) AS cnt FROM episodes WHERE status='Published' GROUP BY story_id
-                ),
-                listener_counts AS (
-                    SELECT story_id, COUNT(*) AS cnt FROM story_listeners WHERE qualified_at IS NOT NULL GROUP BY story_id
-                ),
-                review_stats AS (
-                    SELECT story_id, COUNT(*) AS cnt, ROUND(AVG(stars),1) AS avg_stars FROM story_reviews WHERE status='Visible' GROUP BY story_id
-                ),
-                genre_list AS (
-                    SELECT sg.story_id, group_concat(g.name,' | ') AS names
-                    FROM story_genres sg JOIN genres g ON g.slug=sg.genre_slug GROUP BY sg.story_id
-                )
-                SELECT s.id,s.slug,s.title,s.author,s.genre,s.description,s.created_at,s.updated_at,
-                CASE WHEN s.cover_file<>'' THEN '/api/stories/' || s.id || '/cover' ELSE s.cover_url END AS cover_url,s.status,
-                COALESCE(gl.names,'') AS genres,
-                COALESCE(ec.cnt,0) AS episodeCount,
-                COALESCE(lc.cnt,0) AS listenerCount,
-                COALESCE(rs.cnt,0) AS ratingCount,
-                COALESCE(rs.avg_stars,0) AS ratingAverage
-                FROM stories s
-                LEFT JOIN genre_list gl ON gl.story_id=s.id
-                LEFT JOIN ep_counts ec ON ec.story_id=s.id
-                LEFT JOIN listener_counts lc ON lc.story_id=s.id
-                LEFT JOIN review_stats rs ON rs.story_id=s.id
-                WHERE s.status='Published' ORDER BY s.created_at DESC LIMIT 200");
-            newestStories = published.Select(x => JsonSerializer.SerializeToElement(x)).ToArray();
-            popularStories = published.OrderByDescending(x => x.N("listenerCount"))
-                .Select(x => JsonSerializer.SerializeToElement(x)).ToArray();
-            stories = newestStories;
-            genreCatalog = (await db.ListAsync("SELECT slug,name FROM genres WHERE is_active=1 ORDER BY sort_order,name"))
-                .Select(x => JsonSerializer.SerializeToElement(x)).ToArray();
-            catalogLoaded = true;
+            await ResolveServerSessionAsync(db);
+            await LoadCatalogFromDbAsync(db);
+            if (isAuthenticated)
+            {
+                await LoadListeningFromDbAsync(db);
+            }
             if (page == "story")
             {
                 var route = CurrentRoute();
                 if (route.StartsWith("truyen/", StringComparison.OrdinalIgnoreCase))
                 {
                     var slug = Uri.UnescapeDataString(route["truyen/".Length..]);
-                    var selected = published.FirstOrDefault(x => x.S("slug") == slug);
-                    // Direct story URLs beyond the 200-item home listing also work.
-                    if (selected is null)
-                        selected = await db.FirstAsync(@"SELECT s.id,s.slug,s.title,s.author,s.description,s.genre,s.created_at,s.updated_at,
-                            CASE WHEN s.cover_file<>'' THEN '/api/stories/' || s.id || '/cover' ELSE s.cover_url END AS cover_url,
-                            COALESCE((SELECT group_concat(g.name,' | ') FROM story_genres sg JOIN genres g ON g.slug=sg.genre_slug
-                                WHERE sg.story_id=s.id),'') AS genres,
-                            (SELECT COUNT(*) FROM story_listeners l WHERE l.story_id=s.id AND l.qualified_at IS NOT NULL) AS listenerCount,
-                            (SELECT COUNT(*) FROM story_reviews r WHERE r.story_id=s.id AND r.status='Visible') AS ratingCount,
-                            COALESCE((SELECT ROUND(AVG(r.stars),1) FROM story_reviews r WHERE r.story_id=s.id AND r.status='Visible'),0) AS ratingAverage
-                            FROM stories s WHERE s.slug=@slug AND s.status='Published'", ("@slug", slug));
-                    if (selected is not null)
-                    {
-                        var list = await db.ListAsync("SELECT id,title,episode_number,duration_seconds,created_at FROM episodes WHERE story_id=@id AND status='Published' ORDER BY episode_number", ("@id", selected.S("id")));
-                        detail = JsonSerializer.SerializeToElement(new { story = selected, episodes = list });
-                        episodes = Ui.Array(Ui.Property(detail, "episodes"));
-                    }
+                    await LoadStoryAndReviewsFromDbAsync(db, slug);
                 }
+            }
+            else if (page == "premium")
+            {
+                await LoadPremiumFromDbAsync(db);
             }
             prerenderedRoute = CurrentRoute();
             loading = false;
         }
         catch
         {
-            // Runtime API loading still works if optional SSR catalog preloading fails.
+            // Runtime API loading still works if optional SSR preloading fails.
         }
     }
 
@@ -498,15 +616,15 @@
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
-        if (firstRender)
-        {
-            playerCallback = DotNetObjectReference.Create(this);
-            await Api.BindAutoNext(playerCallback);
-        }
-
         // First interactive render, browser refresh, or a missed route update.
         if (loadedRoute != CurrentRoute())
             await LoadRouteIfChangedAsync();
+
+        if (firstRender)
+        {
+            playerCallback = DotNetObjectReference.Create(this);
+            try { await Api.BindAutoNext(playerCallback); } catch { }
+        }
 
         var id = Ui.Str(playing, "id");
         if (id != "" && activePlayerId != id)
@@ -529,12 +647,11 @@
             loadedRoute = route;
             UpdatePageFromUrl();
 
-            // If SSR prerender already loaded the exact public route, do not wipe UI or re-query stories/genres!
-            if (prerenderedRoute == route && catalogLoaded && page is "home" or "library" or "story")
+            // If server initialization already loaded the exact route & session, do not wipe UI or re-query!
+            if (prerenderedRoute == route && catalogLoaded && sessionChecked)
             {
                 prerenderedRoute = "";
                 loading = false;
-                await HydrateSessionAndReviewsAsync(route);
                 StateHasChanged();
                 return;
             }
@@ -557,26 +674,16 @@
         finally { routeGate.Release(); }
     }
 
-    private async Task HydrateSessionAndReviewsAsync(string route)
-    {
-        var authTask = EnsureAuthLoadedAsync();
-        Task? reviewsTask = null;
-        if (page == "story" && route.StartsWith("truyen/", StringComparison.OrdinalIgnoreCase))
-        {
-            var slug = Uri.UnescapeDataString(route["truyen/".Length..]);
-            reviewsTask = SafeReloadReviewsAsync(slug);
-        }
-        await authTask;
-        if (isAuthenticated)
-        {
-            try { history = Ui.Array(await Api.Get("/listening")); } catch { history = []; }
-        }
-        if (reviewsTask is not null) await reviewsTask;
-    }
-
     private async Task EnsureAuthLoadedAsync(bool force = false)
     {
         if (sessionChecked && !force) return;
+        try
+        {
+            await using var db = await Database.OpenAsync();
+            await ResolveServerSessionAsync(db);
+            if (isAuthenticated || !force) return;
+        }
+        catch { }
         try { user = await Api.Get("/auth/me"); }
         catch { user = default; }
         sessionChecked = true;
@@ -585,17 +692,8 @@
     private async Task EnsureCatalogLoadedAsync(bool force = false)
     {
         if (catalogLoaded && !force && newestStories.Length > 0 && genreCatalog.Length > 0) return;
-        var storiesTask = Api.Get("/stories?sort=new").AsTask();
-        var genresTask = Api.Get("/genres").AsTask();
-        await Task.WhenAll(storiesTask, genresTask);
-        newestStories = Ui.Array(await storiesTask);
-        popularStories = newestStories
-            .OrderByDescending(x => Ui.Num(x, "listenerCount"))
-            .ThenByDescending(x => Ui.Str(x, "created_at"))
-            .ToArray();
-        stories = newestStories;
-        genreCatalog = Ui.Array(await genresTask);
-        catalogLoaded = true;
+        await using var db = await Database.OpenAsync();
+        await LoadCatalogFromDbAsync(db);
     }
 
     public async ValueTask DisposeAsync()
@@ -611,14 +709,14 @@
     {
         try
         {
-            var authTask = EnsureAuthLoadedAsync();
-            var catalogTask = EnsureCatalogLoadedAsync();
-            await Task.WhenAll(authTask, catalogTask);
+            await using var db = await Database.OpenAsync();
+            if (!sessionChecked) await ResolveServerSessionAsync(db);
+            if (!catalogLoaded || newestStories.Length == 0 || genreCatalog.Length == 0)
+                await LoadCatalogFromDbAsync(db);
 
-            var tasks = new List<Task>();
             if (isAuthenticated && (page is "home" or "history" || history.Length == 0))
             {
-                tasks.Add(LoadListeningSafeAsync());
+                await LoadListeningFromDbAsync(db);
             }
             else if (!isAuthenticated)
             {
@@ -626,17 +724,15 @@
             }
 
             if (page == "story" && CurrentRoute().StartsWith("truyen/", StringComparison.OrdinalIgnoreCase))
-                tasks.Add(LoadStory(Uri.UnescapeDataString(CurrentRoute()["truyen/".Length..])));
+                await LoadStoryAndReviewsFromDbAsync(db, Uri.UnescapeDataString(CurrentRoute()["truyen/".Length..]));
             if (page == "premium")
-                tasks.Add(LoadPremium());
+                await LoadPremiumFromDbAsync(db);
             if (page == "account")
             {
                 profileName = Ui.Str(user, "fullName");
                 profilePhone = Ui.Str(user, "phone");
                 profileAddress = Ui.Str(user, "address");
             }
-
-            if (tasks.Count > 0) await Task.WhenAll(tasks);
         }
         catch(Exception e){Notice(e.Message,true);}
         finally{loading=false;}
@@ -644,7 +740,11 @@
 
     private async Task LoadListeningSafeAsync()
     {
-        try { history = Ui.Array(await Api.Get("/listening")); }
+        try
+        {
+            await using var db = await Database.OpenAsync();
+            await LoadListeningFromDbAsync(db);
+        }
         catch { history = []; }
     }
     private void ToggleStoryDescription() => showFullDescription = !showFullDescription;
@@ -661,11 +761,8 @@
     {
         try
         {
-            var detailTask = Api.Get("/stories/" + Uri.EscapeDataString(slug)).AsTask();
-            var reviewsTask = SafeReloadReviewsAsync(slug);
-            await Task.WhenAll(detailTask, reviewsTask);
-            detail = await detailTask;
-            episodes = Ui.Array(Ui.Property(detail, "episodes"));
+            await using var db = await Database.OpenAsync();
+            await LoadStoryAndReviewsFromDbAsync(db, slug);
         }
         catch(Exception e){detail=default;episodes=[];Notice(e.Message,true);}
     }
@@ -675,24 +772,17 @@
     }
     private async Task LoadPremium()
     {
-        var plansTask = Api.Get("/plans").AsTask();
-        var ordersTask = isAuthenticated ? Api.Get("/orders").AsTask() : Task.FromResult<JsonElement>(default);
-        await Task.WhenAll(plansTask, ordersTask);
-        var plans = Ui.Array(await plansTask);
-        var plan = plans.FirstOrDefault(x => Ui.Str(x, "code") == "PREMIUM");
-        if (plan.ValueKind == JsonValueKind.Object) { planPrice = Ui.Num(plan, "price_vnd"); planMonths = Ui.Num(plan, "duration_months"); }
-        if (isAuthenticated) orders = Ui.Array(await ordersTask);
+        await using var db = await Database.OpenAsync();
+        await LoadPremiumFromDbAsync(db);
     }
     private bool Matches(JsonElement st) => (genre==""||Ui.Str(st,"genres").Split(" | ").Any(name=>genreCatalog.Any(g=>Ui.Str(g,"slug")==genre && Ui.Str(g,"name")==name)))
         && (string.IsNullOrEmpty(search) || Ui.Str(st,"title").Contains(search,StringComparison.OrdinalIgnoreCase)||Ui.Str(st,"author").Contains(search,StringComparison.OrdinalIgnoreCase));
     private async Task ReloadReviews(string slug)
     {
-        var allReviews=Ui.Array(await Api.Get("/stories/"+Uri.EscapeDataString(slug)+"/reviews"));
-        var mine=allReviews.FirstOrDefault(r=>Ui.Num(r,"is_mine")==1);
-        hasOwnReview=mine.ValueKind==JsonValueKind.Object;
-        myReviewHidden=hasOwnReview && Ui.Str(mine,"status")=="Hidden";
-        if(hasOwnReview){myReviewStars=Ui.Num(mine,"stars");myReviewBody=Ui.Str(mine,"body");}
-        reviews=allReviews.Where(r=>Ui.Str(r,"status")!="Hidden").ToArray();
+        await using var db = await Database.OpenAsync();
+        var story = await db.FirstAsync("SELECT id FROM stories WHERE slug=@s AND status='Published'", ("@s", slug));
+        if (story is null) { reviews = []; return; }
+        await LoadReviewsByStoryIdFromDbAsync(db, story.S("id"));
     }
     private async Task SaveReview()
     {
@@ -747,10 +837,25 @@
             }
             else
             {
-                await Api.Post("/auth/register", new { username, password, fullName = registerName, phone = registerPhone, address = registerAddress });
-                authMode = "login";
+                var res = await Api.Post("/auth/register", new { username, password, fullName = registerName, phone = registerPhone, address = registerAddress });
+                var registeredUser = Ui.Property(res, "user");
                 password = "";
-                Notice("Đăng ký thành công. Hãy đăng nhập.");
+                if (registeredUser.ValueKind == JsonValueKind.Object)
+                {
+                    user = registeredUser;
+                    sessionChecked = true;
+                    authMode = "";
+                    profileName = Ui.Str(user, "fullName");
+                    profilePhone = Ui.Str(user, "phone");
+                    profileAddress = Ui.Str(user, "address");
+                    Notice("Đăng ký và đăng nhập thành công.");
+                    StateHasChanged();
+                }
+                else
+                {
+                    authMode = "login";
+                    Notice("Đăng ký thành công. Hãy đăng nhập.");
+                }
             }
         }
         catch(Exception e){authError=e.Message;}

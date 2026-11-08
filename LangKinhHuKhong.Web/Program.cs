@@ -33,6 +33,7 @@ var keyRoot = Path.Combine(persistentDataRoot, "dataprotection-keys");
 Directory.CreateDirectory(keyRoot);
 builder.Services.AddDataProtection()
     .SetApplicationName("LangKinhHuKhong.Web")
+    .SetDefaultKeyLifetime(TimeSpan.FromDays(90))
     .PersistKeysToFileSystem(new DirectoryInfo(keyRoot));
 builder.WebHost.ConfigureKestrel(o => o.Limits.MaxRequestBodySize = 280L * 1024 * 1024);
 // Public canonical base is fixed/configured, never taken from the incoming Host header.
@@ -45,6 +46,8 @@ builder.Services.AddScoped<SeoService>();
 builder.Services.AddScoped<BrowserApi>();
 builder.Services.AddSingleton<Database>();
 builder.Services.AddMemoryCache();
+builder.Services.AddHttpContextAccessor();
+builder.Services.AddCascadingAuthenticationState();
 builder.Services.AddHttpClient("VietQrBanks", c => c.Timeout = TimeSpan.FromSeconds(8));
 builder.Services.AddSingleton<AudioStorage>();
 builder.Services.AddSingleton<StorageJanitor>();
@@ -65,15 +68,16 @@ builder.Services.AddAuthentication(CookieAuthenticationDefaults.AuthenticationSc
 {
     o.Cookie.Name = "lkh.session";
     o.Cookie.HttpOnly = true;
-    o.Cookie.SameSite = SameSiteMode.Strict;
+    o.Cookie.SameSite = SameSiteMode.Lax;
     o.Cookie.SecurePolicy = builder.Environment.IsDevelopment() ? CookieSecurePolicy.SameAsRequest : CookieSecurePolicy.Always;
-    o.ExpireTimeSpan = TimeSpan.FromDays(7);
+    o.ExpireTimeSpan = TimeSpan.FromDays(30);
+    o.Cookie.MaxAge = TimeSpan.FromDays(30);
     o.SlidingExpiration = true;
     o.Events.OnRedirectToLogin = c => { c.Response.StatusCode = 401; return Task.CompletedTask; };
     o.Events.OnRedirectToAccessDenied = c => { c.Response.StatusCode = 403; return Task.CompletedTask; };
 });
 builder.Services.AddAuthorization(o => o.AddPolicy("Admin", p => p.RequireRole("Admin")));
-builder.Services.AddAntiforgery(o => { o.HeaderName = "X-CSRF-TOKEN"; o.Cookie.Name = "lkh.antiforgery"; o.Cookie.SameSite = SameSiteMode.Strict; o.Cookie.HttpOnly = true; o.Cookie.SecurePolicy = builder.Environment.IsDevelopment() ? CookieSecurePolicy.SameAsRequest : CookieSecurePolicy.Always; });
+builder.Services.AddAntiforgery(o => { o.HeaderName = "X-CSRF-TOKEN"; o.Cookie.Name = "lkh.antiforgery"; o.Cookie.SameSite = SameSiteMode.Lax; o.Cookie.HttpOnly = true; o.Cookie.SecurePolicy = builder.Environment.IsDevelopment() ? CookieSecurePolicy.SameAsRequest : CookieSecurePolicy.Always; });
 builder.Services.AddRateLimiter(o =>
 {
     o.AddPolicy("auth", ctx => RateLimitPartition.GetFixedWindowLimiter(
@@ -129,6 +133,33 @@ app.UseStaticFiles();
 app.UseAuthentication();
 app.UseAuthorization();
 app.UseRateLimiter();
+bool IsSameOriginAuthRequest(HttpContext ctx)
+{
+    var path = ctx.Request.Path.Value ?? "";
+    if (!path.Equals("/api/auth/login", StringComparison.OrdinalIgnoreCase) &&
+        !path.Equals("/api/auth/register", StringComparison.OrdinalIgnoreCase) &&
+        !path.Equals("/api/auth/logout", StringComparison.OrdinalIgnoreCase))
+        return false;
+    var secFetchSite = ctx.Request.Headers["Sec-Fetch-Site"].ToString();
+    if (!string.IsNullOrEmpty(secFetchSite) &&
+        !secFetchSite.Equals("same-origin", StringComparison.OrdinalIgnoreCase) &&
+        !secFetchSite.Equals("none", StringComparison.OrdinalIgnoreCase))
+        return false;
+    var origin = ctx.Request.Headers.Origin.ToString().TrimEnd('/');
+    var hostOrigin = $"{ctx.Request.Scheme}://{ctx.Request.Host}".TrimEnd('/');
+    if (!string.IsNullOrEmpty(origin))
+    {
+        return origin.Equals(publicOrigin, StringComparison.OrdinalIgnoreCase) ||
+               origin.Equals(hostOrigin, StringComparison.OrdinalIgnoreCase);
+    }
+    var referer = ctx.Request.Headers.Referer.ToString();
+    if (!string.IsNullOrEmpty(referer))
+    {
+        return referer.StartsWith(publicOrigin + "/", StringComparison.OrdinalIgnoreCase) ||
+               referer.StartsWith(hostOrigin + "/", StringComparison.OrdinalIgnoreCase);
+    }
+    return secFetchSite.Equals("same-origin", StringComparison.OrdinalIgnoreCase);
+}
 // CSRF applies also to unauthenticated login/register. Token is obtained through GET /api/auth/csrf.
 app.Use(async (ctx, next) =>
 {
@@ -151,6 +182,7 @@ app.Use(async (ctx, next) =>
             return;
         }
         try { await ctx.RequestServices.GetRequiredService<IAntiforgery>().ValidateRequestAsync(ctx); }
+        catch (AntiforgeryValidationException) when (IsSameOriginAuthRequest(ctx)) { /* Same-origin auth request allowed without extra CSRF round-trip */ }
         catch (AntiforgeryValidationException) { ctx.Response.StatusCode = 400; await ctx.Response.WriteAsJsonAsync(new { error = "CSRF không hợp lệ. Hãy tải lại trang." }); return; }
     }
     // Cookie role alone is not enough: always re-check user status, current role and password stamp.
@@ -164,7 +196,7 @@ app.Use(async (ctx, next) =>
             if (u is not null)
             {
                 authState = (u.S("status"), u.S("role"), Helpers.PasswordStamp(u.S("password_hash")));
-                memoryCache.Set("auth-stamp:" + uid, authState, TimeSpan.FromSeconds(20));
+                memoryCache.Set("auth-stamp:" + uid, authState, TimeSpan.FromMinutes(30));
             }
         }
         var pver = ctx.User.FindFirst("pver")?.Value;
@@ -199,7 +231,7 @@ app.MapGet("/sitemap-stories-{page:int}.xml", async Task<IResult> (int page, Dat
 
 app.MapGet("/api/health", () => Results.Ok(new { status = "ok", app = "Lăng Kính Hư Không", now = Helpers.Now() }));
 app.MapGet("/api/auth/csrf", (HttpContext ctx, IAntiforgery anti) => Results.Ok(new { token = anti.GetAndStoreTokens(ctx).RequestToken }));
-app.MapPost("/api/auth/register", async Task<IResult> (RegisterReq req, Database source, IPasswordHasher<AppUser> hasher) =>
+app.MapPost("/api/auth/register", async Task<IResult> (RegisterReq req, HttpContext ctx, Database source, IPasswordHasher<AppUser> hasher, IAntiforgery anti) =>
 {
     var username = req.Username.Trim().ToLowerInvariant();
     if (!Regex.IsMatch(username, "^[a-z0-9_]{3,30}$")) return Bad("Username 3–30 ký tự: a-z, 0-9, dấu gạch dưới.");
@@ -207,17 +239,43 @@ app.MapPost("/api/auth/register", async Task<IResult> (RegisterReq req, Database
     if (req.FullName?.Length > 100 || req.Phone?.Length > 25 || req.Address?.Length > 300) return Bad("Thông tin hồ sơ quá dài.");
     var user = new AppUser { Id = Helpers.Id(), Username = username };
     var hash = hasher.HashPassword(user, req.Password);
+    var now = Helpers.Now();
     await using var db = await source.OpenAsync();
     try
     {
         await db.ExecAsync("INSERT INTO users(id,username,password_hash,full_name,phone,address,created_at,updated_at) VALUES(@id,@u,@pw,@name,@phone,@addr,@now,@now)",
             ("@id", user.Id), ("@u", username), ("@pw", hash), ("@name", (req.FullName ?? "").Trim()),
-            ("@phone", (req.Phone ?? "").Trim()), ("@addr", (req.Address ?? "").Trim()), ("@now", Helpers.Now()));
+            ("@phone", (req.Phone ?? "").Trim()), ("@addr", (req.Address ?? "").Trim()), ("@now", now));
     }
     catch (SqliteException ex) when (ex.SqliteErrorCode == 19) { return Results.Conflict(new { error = "Username đã tồn tại." }); }
+    var u = await db.FirstAsync("SELECT * FROM users WHERE id=@id", ("@id", user.Id));
+    if (u is not null)
+    {
+        var pverStamp = Helpers.PasswordStamp(hash);
+        memoryCache.Set("auth-stamp:" + user.Id, (u.S("status"), u.S("role"), pverStamp), TimeSpan.FromMinutes(30));
+        var claims = new[]
+        {
+            new Claim("uid", user.Id),
+            new Claim(ClaimTypes.Name, user.Username),
+            new Claim(ClaimTypes.Role, u.S("role")),
+            new Claim("pver", pverStamp)
+        };
+        var principal = new ClaimsPrincipal(new ClaimsIdentity(claims, CookieAuthenticationDefaults.AuthenticationScheme));
+        var authProps = new AuthenticationProperties
+        {
+            IsPersistent = true,
+            IssuedUtc = DateTimeOffset.UtcNow,
+            ExpiresUtc = DateTimeOffset.UtcNow.AddDays(30),
+            AllowRefresh = true
+        };
+        await ctx.SignInAsync(CookieAuthenticationDefaults.AuthenticationScheme, principal, authProps);
+        ctx.User = principal;
+        var csrfToken = anti.GetAndStoreTokens(ctx).RequestToken;
+        return Results.Ok(new { message = "Đăng ký và đăng nhập thành công.", user = Helpers.SafeUser(u, ""), csrfToken });
+    }
     return Results.Ok(new { message = "Đăng ký thành công. Hãy đăng nhập." });
 }).RequireRateLimiting("auth");
-app.MapPost("/api/auth/login", async Task<IResult> (LoginReq req, HttpContext ctx, Database source, IPasswordHasher<AppUser> hasher) =>
+app.MapPost("/api/auth/login", async Task<IResult> (LoginReq req, HttpContext ctx, Database source, IPasswordHasher<AppUser> hasher, IAntiforgery anti) =>
 {
     const string dummyHash = "AQAAAAIAAYagAAAAEBWFTXPbqN9JBzQgvrEQMX+XprLPfLx9Pmt0jTsif3K907RzQaUjyIAcTPSK2mILqA==";
     await using var db = await source.OpenAsync();
@@ -238,7 +296,7 @@ app.MapPost("/api/auth/login", async Task<IResult> (LoginReq req, HttpContext ct
         await db.ExecAsync("UPDATE users SET password_hash=@hash,updated_at=@at WHERE id=@id", ("@hash", currentHash), ("@at", Helpers.Now()), ("@id", identity.Id));
     }
     var pverStamp = Helpers.PasswordStamp(currentHash);
-    memoryCache.Set("auth-stamp:" + identity.Id, (u.S("status"), u.S("role"), pverStamp), TimeSpan.FromSeconds(20));
+    memoryCache.Set("auth-stamp:" + identity.Id, (u.S("status"), u.S("role"), pverStamp), TimeSpan.FromMinutes(30));
     var claims = new[]
     {
         new Claim("uid", identity.Id),
@@ -246,10 +304,27 @@ app.MapPost("/api/auth/login", async Task<IResult> (LoginReq req, HttpContext ct
         new Claim(ClaimTypes.Role, u.S("role")),
         new Claim("pver", pverStamp)
     };
-    await ctx.SignInAsync(CookieAuthenticationDefaults.AuthenticationScheme, new ClaimsPrincipal(new ClaimsIdentity(claims, CookieAuthenticationDefaults.AuthenticationScheme)));
-    return Results.Ok(new { user = Helpers.SafeUser(u, await Helpers.PremiumUntil(db, identity.Id)) });
+    var principal = new ClaimsPrincipal(new ClaimsIdentity(claims, CookieAuthenticationDefaults.AuthenticationScheme));
+    var authProps = new AuthenticationProperties
+    {
+        IsPersistent = true,
+        IssuedUtc = DateTimeOffset.UtcNow,
+        ExpiresUtc = DateTimeOffset.UtcNow.AddDays(30),
+        AllowRefresh = true
+    };
+    await ctx.SignInAsync(CookieAuthenticationDefaults.AuthenticationScheme, principal, authProps);
+    ctx.User = principal;
+    var csrfToken = anti.GetAndStoreTokens(ctx).RequestToken;
+    return Results.Ok(new { user = Helpers.SafeUser(u, await Helpers.PremiumUntil(db, identity.Id)), csrfToken });
 }).RequireRateLimiting("auth");
-app.MapPost("/api/auth/logout", async Task<IResult> (HttpContext ctx) => { InvalidateUserAuthCache(Helpers.UserId(ctx.User)); await ctx.SignOutAsync(); return Results.Ok(new { message = "Đã đăng xuất" }); }).RequireAuthorization();
+app.MapPost("/api/auth/logout", async Task<IResult> (HttpContext ctx, IAntiforgery anti) =>
+{
+    InvalidateUserAuthCache(Helpers.UserId(ctx.User));
+    await ctx.SignOutAsync(CookieAuthenticationDefaults.AuthenticationScheme);
+    ctx.User = new ClaimsPrincipal(new ClaimsIdentity());
+    var csrfToken = anti.GetAndStoreTokens(ctx).RequestToken;
+    return Results.Ok(new { message = "Đã đăng xuất", csrfToken });
+}).RequireAuthorization();
 app.MapGet("/api/auth/me", async Task<IResult> (HttpContext ctx, Database source) =>
 {
     await using var db = await source.OpenAsync();

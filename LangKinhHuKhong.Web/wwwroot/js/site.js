@@ -20,8 +20,15 @@ window.lkh = (() => {
   setTimeout(() => { token().catch(() => {}); }, 0);
   async function send(path, method = 'GET', body = null, retried = false) {
     const mutation = !['GET', 'HEAD'].includes(method);
+    const isAuthMutation = path === '/auth/login' || path === '/auth/register' || path === '/auth/logout';
     const headers = { 'Accept': 'application/json' };
-    if (mutation) headers['X-CSRF-TOKEN'] = await token();
+    if (mutation) {
+      if (csrf) {
+        headers['X-CSRF-TOKEN'] = csrf;
+      } else if (!isAuthMutation || retried) {
+        headers['X-CSRF-TOKEN'] = await token();
+      }
+    }
     if (body !== null && !(body instanceof FormData)) headers['Content-Type'] = 'application/json';
     const response = await fetch('/api' + path, {
       method,
@@ -39,7 +46,9 @@ window.lkh = (() => {
       }
       throw new Error(result.error || `Yêu cầu thất bại (HTTP ${response.status})`);
     }
-    if (path === '/auth/login' || path === '/auth/logout') {
+    if (typeof result.csrfToken === 'string' && result.csrfToken.length > 0) {
+      csrf = result.csrfToken;
+    } else if (isAuthMutation) {
       csrf = null;
       setTimeout(() => { token(true).catch(() => {}); }, 0);
     }

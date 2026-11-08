@@ -9,7 +9,7 @@ namespace LangKinhHuKhong.Components.Shared;
 public sealed class BrowserApi(IJSRuntime js) : IAsyncDisposable
 {
     private Task<IJSObjectReference>? moduleTask;
-    private const string ModulePath = "/js/lkh-interop.js?v=1.9.5.2";
+    private const string ModulePath = "/js/lkh-interop.js?v=1.9.6.0";
 
     private async Task<IJSObjectReference> ModuleAsync()
     {

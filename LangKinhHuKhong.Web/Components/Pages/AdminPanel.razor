@@ -1,4 +1,7 @@
 @inject BrowserApi Api
+@inject Database Database
+@inject AudioStorage AudioStorage
+@inject GoogleDriveService GoogleDrive
 @inject NavigationManager Navigation
 
 <section class="section top-section admin-page">
@@ -783,11 +786,16 @@
     private string ActiveCoverUrl => string.IsNullOrEmpty(Ui.Str(ActiveStory,"cover_image_url"))
         ? "" : Ui.Str(ActiveStory,"cover_image_url") + "?v=" + Uri.EscapeDataString(Ui.Str(ActiveStory,"updated_at"));
     
+    protected override async Task OnInitializedAsync()
+    {
+        CheckQueryFlags();
+        await Reload();
+    }
+
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
-        if(firstRender)
+        if (firstRender && loading)
         {
-            CheckQueryFlags();
             await Reload();
             StateHasChanged();
         }
@@ -825,52 +833,91 @@
         loading=true;
         try
         {
-            var statsTask = Api.Get("/admin/stats").AsTask();
-            var storageTask = Api.Get("/admin/storage").AsTask();
-            var storiesTask = Api.Get("/admin/stories").AsTask();
-            var genresTask = Api.Get("/admin/genres").AsTask();
-            var plansTask = Api.Get("/admin/plans").AsTask();
-            var gdriveTask = SafeGetGdriveStatusAsync();
+            await using var db = await Database.OpenAsync();
+            var statRow = await db.FirstAsync(@"SELECT
+                (SELECT COUNT(*) FROM users WHERE status='Active') AS users,
+                (SELECT COUNT(*) FROM stories) AS stories,
+                (SELECT COUNT(*) FROM episodes) AS episodes,
+                (SELECT COUNT(*) FROM orders WHERE status IN ('Pending','Reviewing')) AS pending,
+                (SELECT COALESCE(SUM(amount_vnd),0) FROM payments) AS income,
+                (SELECT COUNT(DISTINCT user_id) FROM subscriptions WHERE ends_at>@now) AS premium",
+                ("@now", Helpers.Now()));
+            stats = JsonSerializer.SerializeToElement(new
+            {
+                users = statRow?.N("users") ?? 0,
+                stories = statRow?.N("stories") ?? 0,
+                episodes = statRow?.N("episodes") ?? 0,
+                pending = statRow?.N("pending") ?? 0,
+                income = statRow?["income"] ?? 0,
+                premium = statRow?.N("premium") ?? 0
+            });
+            var cleanupPending = Convert.ToInt32(await db.ValueAsync("SELECT COUNT(*) FROM storage_cleanup"));
+            storageInfo = JsonSerializer.SerializeToElement(new
+            {
+                mode = AudioStorage.Mode,
+                bucket = AudioStorage.Bucket,
+                isR2 = AudioStorage.IsR2,
+                cleanupPending
+            });
+            storyRows = (await db.ListAsync(@"
+                WITH g_keys AS (
+                    SELECT sg.story_id, group_concat(g.slug,'|') AS keys
+                    FROM story_genres sg JOIN genres g ON g.slug=sg.genre_slug GROUP BY sg.story_id
+                ),
+                ep_cnt AS (SELECT story_id, COUNT(*) AS cnt FROM episodes GROUP BY story_id),
+                tf_cnt AS (SELECT story_id, COUNT(*) AS cnt FROM story_text_files GROUP BY story_id)
+                SELECT stories.*,
+                CASE WHEN stories.cover_file<>'' THEN '/api/stories/' || stories.id || '/cover' ELSE stories.cover_url END AS cover_image_url,
+                COALESCE(gk.keys,'') AS genre_keys,
+                COALESCE(ec.cnt,0) AS episode_count,
+                COALESCE(tc.cnt,0) AS text_count
+                FROM stories
+                LEFT JOIN g_keys gk ON gk.story_id=stories.id
+                LEFT JOIN ep_cnt ec ON ec.story_id=stories.id
+                LEFT JOIN tf_cnt tc ON tc.story_id=stories.id
+                ORDER BY stories.updated_at DESC LIMIT 300")).Select(x => JsonSerializer.SerializeToElement(x)).ToArray();
+            genreRows = (await db.ListAsync("SELECT slug,name,is_active,sort_order FROM genres ORDER BY sort_order,name"))
+                .Select(x => JsonSerializer.SerializeToElement(x)).ToArray();
+            var p = await db.FirstAsync("SELECT * FROM subscription_plans LIMIT 1");
+            if (p is not null) premiumPrice = p.N("price_vnd");
+            gdriveStatus = JsonSerializer.SerializeToElement(GoogleDrive.GetStatus());
+            gdriveRootFolderInput = Ui.Str(gdriveStatus, "rootFolderName") != "" ? Ui.Str(gdriveStatus, "rootFolderName") : "LangKinhHuKhong-BanThao";
 
-            await Task.WhenAll(statsTask, storageTask, storiesTask, genresTask, plansTask, gdriveTask);
-
-            stats = await statsTask;
-            storageInfo = await storageTask;
-            storyRows = Ui.Array(await storiesTask);
-            genreRows = Ui.Array(await genresTask);
-            var p = Ui.Array(await plansTask).FirstOrDefault();
-            if (p.ValueKind == JsonValueKind.Object) premiumPrice = Ui.Num(p, "price_vnd");
-
-            // Unlock the primary Admin UI immediately while secondary tabs load in parallel.
-            loading = false;
-            StateHasChanged();
-
-            var textsTask = Api.Get("/admin/texts").AsTask();
-            var reviewsTask = Api.Get("/admin/reviews").AsTask();
-            var usersTask = Api.Get("/admin/users").AsTask();
-            var ordersTask = Api.Get("/admin/orders").AsTask();
-            var auditTask = Api.Get("/admin/audit").AsTask();
-            var epTask = activeStoryId != "" ? LoadEpisodes() : Task.FromResult(true);
-
-            await Task.WhenAll(textsTask, reviewsTask, usersTask, ordersTask, auditTask, epTask);
-
-            allTextFileRows = Ui.Array(await textsTask);
-            reviewRows = Ui.Array(await reviewsTask);
-            userRows = Ui.Array(await usersTask);
-            orderRows = Ui.Array(await ordersTask);
-            auditRows = Ui.Array(await auditTask);
+            allTextFileRows = (await db.ListAsync(@"SELECT tf.id,tf.story_id,tf.title,tf.file_name,tf.extension,tf.size_bytes,tf.drive_file_id,
+                CASE
+                  WHEN tf.stored_name<>'' AND tf.drive_file_id<>'' THEN 'both'
+                  WHEN tf.storage_target='drive' OR (tf.stored_name='' AND tf.drive_file_id<>'') THEN 'drive'
+                  ELSE 'vps'
+                END AS storage_target,
+                tf.created_at,
+                CASE WHEN tf.updated_at<>'' THEN tf.updated_at ELSE tf.created_at END AS updated_at,
+                s.title AS story_title, s.slug AS story_slug
+                FROM story_text_files tf JOIN stories s ON s.id=tf.story_id
+                ORDER BY COALESCE(NULLIF(tf.updated_at,''), tf.created_at) DESC, tf.file_name ASC LIMIT 500"))
+                .Select(x => JsonSerializer.SerializeToElement(x)).ToArray();
+            reviewRows = (await db.ListAsync(@"SELECT r.id,r.stars,r.body,r.status,r.updated_at,
+                u.username,s.title AS story_title FROM story_reviews r
+                JOIN users u ON u.id=r.user_id JOIN stories s ON s.id=r.story_id
+                ORDER BY r.updated_at DESC LIMIT 200")).Select(x => JsonSerializer.SerializeToElement(x)).ToArray();
+            userRows = (await db.ListAsync(@"
+                WITH sub_max AS (SELECT user_id, MAX(ends_at) AS max_end FROM subscriptions GROUP BY user_id)
+                SELECT u.id,u.username,u.full_name,u.phone,u.address,u.role,u.status,u.created_at,
+                sm.max_end AS premiumUntil
+                FROM users u LEFT JOIN sub_max sm ON sm.user_id=u.id
+                ORDER BY u.created_at DESC LIMIT 200")).Select(x => JsonSerializer.SerializeToElement(x)).ToArray();
+            await db.ExecAsync("UPDATE orders SET status='Expired' WHERE order_type='Purchase' AND status='Pending' AND expires_at<=@now", ("@now", Helpers.Now()));
+            orderRows = (await db.ListAsync(@"SELECT o.id,o.code,o.amount_vnd,o.duration_months,o.status,o.order_type,o.grant_reason,
+                o.premium_start_at,o.premium_end_at,o.created_at,o.expires_at,o.paid_at,o.review_note,
+                o.bank_name,o.account_number,o.account_name,o.bank_bin,o.bank_receiver_id,
+                u.username,u.full_name,COALESCE(admin.username,'') AS granted_by_name
+                FROM orders o JOIN users u ON u.id=o.user_id LEFT JOIN users admin ON admin.id=o.reviewed_by
+                ORDER BY o.created_at DESC LIMIT 200")).Select(x => JsonSerializer.SerializeToElement(x)).ToArray();
+            auditRows = (await db.ListAsync("SELECT id,actor_id,action,subject_id,details,created_at FROM audit_logs ORDER BY created_at DESC LIMIT 200"))
+                .Select(x => JsonSerializer.SerializeToElement(x)).ToArray();
+            if (activeStoryId != "") await LoadEpisodes();
         }
         catch(Exception e){Notify(e.Message,true);}
         finally{loading=false;}
-    }
-    private async Task SafeGetGdriveStatusAsync()
-    {
-        try
-        {
-            gdriveStatus = await Api.Get("/admin/gdrive/status");
-            gdriveRootFolderInput = Ui.Str(gdriveStatus, "rootFolderName") != "" ? Ui.Str(gdriveStatus, "rootFolderName") : "LangKinhHuKhong-BanThao";
-        }
-        catch { }
     }
     private void Notify(string text,bool error=false){message=text;failed=error;}
     private void NewStory(){editingStoryId="";story=new();}
