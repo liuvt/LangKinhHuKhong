@@ -131,6 +131,13 @@ CREATE TABLE IF NOT EXISTS listening_progress (
  PRIMARY KEY(user_id,episode_id)
 );
 CREATE INDEX IF NOT EXISTS ix_listening_user_updated ON listening_progress(user_id,updated_at DESC);
+CREATE TABLE IF NOT EXISTS user_story_views (
+ user_id TEXT NOT NULL REFERENCES users(id),
+ story_id TEXT NOT NULL REFERENCES stories(id) ON DELETE CASCADE,
+ viewed_at TEXT NOT NULL,
+ PRIMARY KEY(user_id,story_id)
+);
+CREATE INDEX IF NOT EXISTS ix_user_story_views_user ON user_story_views(user_id,viewed_at DESC);
 CREATE TABLE IF NOT EXISTS audit_logs (
  id TEXT PRIMARY KEY,
  actor_id TEXT,

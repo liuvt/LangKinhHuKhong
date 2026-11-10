@@ -375,17 +375,37 @@ app.MapGet("/api/stories", async Task<IResult> (Database source, string? q, stri
 {
     var order = sort switch
     {
-        "popular" => "listenerCount DESC,s.created_at DESC",
+        "popular" => "listenerCount DESC, activeListenerCount DESC, ratingAverage DESC, episodeCount DESC, latestEpisodeAt DESC",
         "new" => "s.created_at DESC",
-        _ => "s.updated_at DESC"
+        _ => "latestEpisodeAt DESC, s.updated_at DESC"
     };
     await using var db = await source.OpenAsync();
     var rows = await db.ListAsync(@"
         WITH ep_counts AS (
             SELECT story_id, COUNT(*) AS cnt FROM episodes WHERE status='Published' GROUP BY story_id
         ),
+        latest_ep AS (
+            SELECT e.story_id,
+                   e.episode_number AS latest_ep_num,
+                   e.title AS latest_ep_title,
+                   e.created_at AS latest_ep_at
+            FROM episodes e
+            WHERE e.status='Published'
+              AND e.id = (
+                  SELECT e2.id FROM episodes e2
+                  WHERE e2.story_id = e.story_id AND e2.status='Published'
+                  ORDER BY e2.created_at DESC, e2.episode_number DESC LIMIT 1
+              )
+        ),
         listener_counts AS (
             SELECT story_id, COUNT(*) AS cnt FROM story_listeners WHERE qualified_at IS NOT NULL GROUP BY story_id
+        ),
+        total_listeners AS (
+            SELECT story_id, COUNT(DISTINCT user_id) AS cnt FROM (
+                SELECT sl.story_id, sl.user_id FROM story_listeners sl
+                UNION
+                SELECT ep.story_id, lp.user_id FROM listening_progress lp JOIN episodes ep ON ep.id = lp.episode_id
+            ) GROUP BY story_id
         ),
         review_stats AS (
             SELECT story_id, COUNT(*) AS cnt, ROUND(AVG(stars),1) AS avg_stars FROM story_reviews WHERE status='Visible' GROUP BY story_id
@@ -394,17 +414,23 @@ app.MapGet("/api/stories", async Task<IResult> (Database source, string? q, stri
             SELECT sg.story_id, group_concat(g.name,' | ') AS names
             FROM story_genres sg JOIN genres g ON g.slug=sg.genre_slug GROUP BY sg.story_id
         )
-        SELECT s.id,s.slug,s.title,s.author,s.genre,s.description,s.created_at,
+        SELECT s.id,s.slug,s.title,s.author,s.genre,s.description,s.created_at,s.updated_at,
         CASE WHEN s.cover_file<>'' THEN '/api/stories/' || s.id || '/cover' ELSE s.cover_url END AS cover_url,s.status,
         COALESCE(gl.names,'') AS genres,
         COALESCE(ec.cnt,0) AS episodeCount,
+        COALESCE(le.latest_ep_num,0) AS latestEpisodeNumber,
+        COALESCE(le.latest_ep_title,'') AS latestEpisodeTitle,
+        COALESCE(le.latest_ep_at, s.updated_at, s.created_at) AS latestEpisodeAt,
         COALESCE(lc.cnt,0) AS listenerCount,
+        COALESCE(tl.cnt,0) AS activeListenerCount,
         COALESCE(rs.cnt,0) AS ratingCount,
         COALESCE(rs.avg_stars,0) AS ratingAverage
         FROM stories s
         LEFT JOIN genre_list gl ON gl.story_id=s.id
         LEFT JOIN ep_counts ec ON ec.story_id=s.id
+        LEFT JOIN latest_ep le ON le.story_id=s.id
         LEFT JOIN listener_counts lc ON lc.story_id=s.id
+        LEFT JOIN total_listeners tl ON tl.story_id=s.id
         LEFT JOIN review_stats rs ON rs.story_id=s.id
         WHERE s.status='Published' AND (@q='' OR s.title LIKE @term OR s.author LIKE @term)
         AND (@genre='' OR EXISTS(SELECT 1 FROM story_genres sg WHERE sg.story_id=s.id AND sg.genre_slug=@genre))
@@ -412,10 +438,10 @@ app.MapGet("/api/stories", async Task<IResult> (Database source, string? q, stri
         ("@q",q ?? ""),("@term","%"+(q ?? "")+"%"),("@genre",genre ?? ""));
     return Results.Ok(rows);
 });
-app.MapGet("/api/stories/{slug}", async Task<IResult> (string slug, Database source) =>
+app.MapGet("/api/stories/{slug}", async Task<IResult> (string slug, HttpContext ctx, Database source) =>
 {
     await using var db = await source.OpenAsync();
-    var story = await db.FirstAsync(@"SELECT id,slug,title,author,genre,description,created_at,
+    var story = await db.FirstAsync(@"SELECT id,slug,title,author,genre,description,created_at,updated_at,
         CASE WHEN cover_file<>'' THEN '/api/stories/' || id || '/cover' ELSE cover_url END AS cover_url,status,
         COALESCE((SELECT group_concat(g.name,' | ') FROM story_genres sg JOIN genres g ON g.slug=sg.genre_slug WHERE sg.story_id=stories.id),'') AS genres,
         (SELECT COUNT(*) FROM story_listeners l WHERE l.story_id=stories.id AND l.qualified_at IS NOT NULL) AS listenerCount,
@@ -423,6 +449,16 @@ app.MapGet("/api/stories/{slug}", async Task<IResult> (string slug, Database sou
         COALESCE((SELECT ROUND(AVG(r.stars),1) FROM story_reviews r WHERE r.story_id=stories.id AND r.status='Visible'),0) AS ratingAverage
         FROM stories WHERE slug=@slug AND status='Published'",("@slug",slug));
     if (story is null) return Results.NotFound();
+    if (ctx.User.Identity?.IsAuthenticated == true)
+    {
+        var uid = Helpers.UserId(ctx.User);
+        if (!string.IsNullOrEmpty(uid))
+        {
+            await db.ExecAsync(@"INSERT INTO user_story_views(user_id,story_id,viewed_at) VALUES(@u,@s,@now)
+                ON CONFLICT(user_id,story_id) DO UPDATE SET viewed_at=excluded.viewed_at",
+                ("@u", uid), ("@s", story.S("id")), ("@now", Helpers.Now()));
+        }
+    }
     var eps = await db.ListAsync("SELECT id,title,episode_number,duration_seconds,created_at FROM episodes WHERE story_id=@id AND status='Published' ORDER BY episode_number",("@id",story.S("id")));
     return Results.Ok(new { story, episodes = eps });
 });
@@ -572,10 +608,38 @@ app.MapPost("/api/episodes/{episodeId}/playback/ping", async Task<IResult> (stri
 app.MapGet("/api/listening", async Task<IResult> (HttpContext ctx, Database source) =>
 {
     await using var db = await source.OpenAsync();
-    return Results.Ok(await db.ListAsync(@"SELECT p.episode_id,p.seconds,p.updated_at,e.title AS episode_title,s.title AS story_title,s.slug,
-        CASE WHEN s.cover_file<>'' THEN '/api/stories/' || s.id || '/cover' ELSE s.cover_url END AS cover_url
-        FROM listening_progress p JOIN episodes e ON e.id=p.episode_id JOIN stories s ON s.id=e.story_id
-        WHERE p.user_id=@u ORDER BY p.updated_at DESC LIMIT 30",("@u",Helpers.UserId(ctx.User))));
+    return Results.Ok(await db.ListAsync(@"
+        WITH latest_lp AS (
+            SELECT e.story_id, p.episode_id, p.seconds, p.updated_at, e.title AS episode_title, e.episode_number
+            FROM listening_progress p
+            JOIN episodes e ON e.id = p.episode_id
+            WHERE p.user_id = @u
+              AND p.episode_id = (
+                  SELECT p2.episode_id FROM listening_progress p2
+                  JOIN episodes e2 ON e2.id = p2.episode_id
+                  WHERE p2.user_id = @u AND e2.story_id = e.story_id
+                  ORDER BY p2.updated_at DESC LIMIT 1
+              )
+        ),
+        story_activity AS (
+            SELECT story_id, MAX(at) AS activity_at FROM (
+                SELECT story_id, updated_at AS at FROM latest_lp
+                UNION ALL
+                SELECT story_id, viewed_at AS at FROM user_story_views WHERE user_id = @u
+            ) GROUP BY story_id
+        )
+        SELECT COALESCE(lp.episode_id, '') AS episode_id,
+               COALESCE(lp.seconds, 0) AS seconds,
+               sa.activity_at AS updated_at,
+               COALESCE(lp.episode_title, '') AS episode_title,
+               COALESCE(lp.episode_number, 0) AS episode_number,
+               s.title AS story_title,
+               s.slug,
+               CASE WHEN s.cover_file<>'' THEN '/api/stories/' || s.id || '/cover' ELSE s.cover_url END AS cover_url
+        FROM story_activity sa
+        JOIN stories s ON s.id = sa.story_id AND s.status = 'Published'
+        LEFT JOIN latest_lp lp ON lp.story_id = sa.story_id
+        ORDER BY sa.activity_at DESC LIMIT 30", ("@u", Helpers.UserId(ctx.User))));
 }).RequireAuthorization();
 
 // Pricing and orders: bank information is snapshotted on each order.
@@ -1949,10 +2013,12 @@ admin.MapPost("/stories/{id}/episodes", async Task<IResult> (string id, HttpRequ
         var (r2Ready, storageMode, verifyDetail) = await storage.VerifyEpisodeStorageAsync(storedFull, storedPreview, storedHls, procCts.Token);
         if (!r2Ready) throw new InvalidDataException("Kiểm tra Cloudflare R2 chưa đạt: " + verifyDetail);
 
+        var epCreatedAt = Helpers.Now();
         await db.ExecAsync(@"INSERT INTO episodes(id,story_id,title,episode_number,full_file,preview_file,hls_ref,duration_seconds,created_at)
            VALUES(@id,@sid,@title,@number,@full,@preview,@hls,@duration,@now)",
            ("@id",epId),("@sid",id),("@title",title),("@number",number),("@full",storedFull),
-           ("@preview",storedPreview),("@hls",storedHls),("@duration",duration),("@now",Helpers.Now()));
+           ("@preview",storedPreview),("@hls",storedHls),("@duration",duration),("@now",epCreatedAt));
+        await db.ExecAsync("UPDATE stories SET updated_at=@now WHERE id=@sid", ("@now", epCreatedAt), ("@sid", id));
         episodeSavedInDatabase = true;
         recentAudioOutcomes[jobKey] = (true, verifyDetail, epId, DateTimeOffset.UtcNow);
         await Helpers.Audit(db,Helpers.UserId(ctx.User),"episode.upload",epId,$"story={id}; episode={number}; storage={storageMode}; r2Verified={r2Ready}");
@@ -2208,6 +2274,8 @@ admin.MapPut("/episodes/{id}", async Task<IResult> (string id, EpisodeReq req, H
     {
         var n = await db.ExecAsync("UPDATE episodes SET title=@t,episode_number=@n,status=@s WHERE id=@id",("@t",req.Title.Trim()),("@n",req.EpisodeNumber),("@s",req.Status),("@id",id));
         if (n == 0) return Results.NotFound();
+        if (req.Status == "Published")
+            await db.ExecAsync("UPDATE stories SET updated_at=@now WHERE id=(SELECT story_id FROM episodes WHERE id=@id)", ("@now", Helpers.Now()), ("@id", id));
     }
     catch (SqliteException ex) when (ex.SqliteErrorCode == 19) { return Results.Conflict(new { error = "Số thứ tự tập bị trùng." }); }
     await Helpers.Audit(db,Helpers.UserId(ctx.User),"episode.update",id,req.Title);

@@ -28,6 +28,16 @@ public static class Ui
     public static string Money(int amount) => amount.ToString("N0", CultureInfo.GetCultureInfo("vi-VN")) + "đ";
     public static string Date(string input)
         => DateTimeOffset.TryParse(input, out var d) ? d.ToLocalTime().ToString("dd/MM/yyyy HH:mm") : "—";
+    public static string TimeAgo(string input)
+    {
+        if (!DateTimeOffset.TryParse(input, out var d)) return "";
+        var diff = DateTimeOffset.UtcNow - d.ToUniversalTime();
+        if (diff.TotalMinutes < 1) return "Vừa xong";
+        if (diff.TotalMinutes < 60) return $"{(int)diff.TotalMinutes} phút trước";
+        if (diff.TotalHours < 24) return $"{(int)diff.TotalHours} giờ trước";
+        if (diff.TotalDays < 30) return $"{(int)diff.TotalDays} ngày trước";
+        return d.ToLocalTime().ToString("dd/MM/yyyy");
+    }
     public static string Duration(int seconds)
     {
         var s = Math.Max(0, seconds);

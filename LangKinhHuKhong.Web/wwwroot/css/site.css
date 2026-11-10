@@ -238,3 +238,18 @@
 .notepad-statusbar{display:flex;flex-wrap:wrap;justify-content:space-between;align-items:center;gap:.75rem;margin-top:.85rem;padding:.55rem .9rem;background:rgba(15,23,42,.05);border:1px solid var(--border,#e2e8f0);border-bottom:none;border-radius:12px 12px 0 0;font-size:.82rem;color:var(--muted,#475569)}
 .online-notepad-textarea{width:100%;min-height:540px;padding:1.1rem 1.25rem;border:1px solid var(--border,#cbd5e1);border-radius:0 0 12px 12px;background:#ffffff;color:#0f172a;font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,"Liberation Mono",monospace;font-size:.95rem;line-height:1.7;resize:vertical;outline:none;tab-size:2}
 .online-notepad-textarea:focus{border-color:#2563eb;box-shadow:0 0 0 3px rgba(37,99,235,.12)}
+
+/* V1.9.6 – Chương mới cập nhật, Top nghe nhiều & Lịch sử xem/nghe */
+.cover-badge{position:absolute;top:9px;left:9px;z-index:2;padding:4px 8px;border-radius:8px;font-size:10px;font-weight:850;letter-spacing:.02em;line-height:1.2;box-shadow:0 4px 12px rgba(15,23,42,.22);backdrop-filter:blur(6px)}
+.cover-badge-new{background:linear-gradient(125deg,#6758df,#4f42c6);color:#fff;border:1px solid rgba(255,255,255,.26)}
+.cover-badge-time{position:absolute;left:9px;bottom:10px;z-index:2;padding:3px 7px;border-radius:7px;font-size:9.5px;font-weight:750;background:rgba(15,23,42,.68);color:#f8fafc;backdrop-filter:blur(4px);max-width:calc(100% - 56px);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.cover-badge-rank{background:rgba(15,23,42,.74);color:#fff;border:1px solid rgba(255,255,255,.2)}
+.cover-badge-rank.rank-1{background:linear-gradient(125deg,#f59e0b,#d97706);color:#fff}
+.cover-badge-rank.rank-2{background:linear-gradient(125deg,#6366f1,#4f46e5);color:#fff}
+.cover-badge-rank.rank-3{background:linear-gradient(125deg,#ec4899,#db2777);color:#fff}
+.latest-ep-pill{margin:4px 0 3px;font-size:11px;font-weight:750;color:#5b4dd1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.history-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(285px,1fr));gap:12px}
+.history-card{margin:0;padding:11px 14px}
+.history-thumb{width:46px;height:60px;flex-shrink:0;border-radius:9px;overflow:hidden;display:grid;place-items:center;background:#eeecff;color:#6557d0;border:1px solid #e6e3f8}
+.history-thumb img{width:100%;height:100%;object-fit:cover;display:block}
+.history-empty-inline{padding:24px 18px;display:flex;align-items:center;justify-content:center;gap:12px;flex-wrap:wrap}

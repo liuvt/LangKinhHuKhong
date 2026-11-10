@@ -33,7 +33,7 @@
             <div class="side-caption">KHÁM PHÁ</div>
             <NavLink class="nav-item" href="/" Match="NavLinkMatch.All"><AppIcon Name="home" /><span>Trang chủ</span></NavLink>
             <NavLink class="@("nav-item" + (page == "story" ? " active" : ""))" href="/thu-vien" Match="NavLinkMatch.All"><AppIcon Name="library" /><span>Thư viện truyện</span></NavLink>
-            <NavLink class="nav-item" href="/lich-su" Match="NavLinkMatch.All"><AppIcon Name="history" /><span>Nghe gần đây</span></NavLink>
+            <NavLink class="nav-item" href="/lich-su" Match="NavLinkMatch.All"><AppIcon Name="history" /><span>Lịch sử xem &amp; nghe</span></NavLink>
             <div class="side-caption">TÀI KHOẢN</div>
             <NavLink class="nav-item" href="/premium" Match="NavLinkMatch.All"><AppIcon Name="crown" /><span>@(isPremium ? "Premium của tôi" : "Gói Premium")</span>@if(!isPremium){<span class="nav-new">PRO</span>}</NavLink>
             <NavLink class="nav-item" href="/tai-khoan" Match="NavLinkMatch.All"><AppIcon Name="user" /><span>Hồ sơ cá nhân</span></NavLink>
@@ -88,20 +88,181 @@
             @if (loading) { <div class="panel skeleton">Đang tải dữ liệu...</div> }
             else if (page == "home")
             {
-                <section class="section top-section home-stories"><div class="section-heading flex flex-wrap items-end justify-between gap-4"><div><h1>Nghe truyện audio mới tại Lăng Kính Hư Không</h1><p>Nghe audio truyện tiên hiệp, kiếm hiệp, xuyên không và huyền huyễn bằng giọng đọc tiếng Việt.</p></div><a href="/thu-vien">Tất cả truyện →</a></div><div class="story-grid grid gap-5">@foreach (var story in newestStories.Take(8)) { <a class="story-card group transition-all duration-200" href="@StoryUrl(story)"><div class="cover"><span class="cover-fallback">◈</span>@if (!string.IsNullOrWhiteSpace(Ui.Str(story,"cover_url"))) { <img src="@Ui.Str(story,"cover_url")" alt="@Ui.Str(story,"title")" loading="lazy" /> }<span class="cover-play"><AppIcon Name="play" Size="19" /></span></div><h3>@Ui.Str(story,"title")</h3><p>@Ui.Str(story,"author")</p><div class="story-meta">@Ui.Str(story,"genres") · @Ui.Num(story,"episodeCount") tập</div><div class="story-trends"><span>◉ @Ui.Num(story,"listenerCount") người nghe</span> <span>★ @Ui.Str(story,"ratingAverage")</span></div></a> }</div>@if(stories.Length == 0){<div class="empty">Chưa có truyện nào được phát hành. Admin có thể tạo bộ truyện và tải MP3 tại Dashboard.</div>}</section>
-                @if (popularStories.Any(x=>Ui.Num(x,"listenerCount")>0))
+                <section class="section top-section home-stories">
+                    <div class="section-heading flex flex-wrap items-end justify-between gap-4">
+                        <div>
+                            <small>CHƯƠNG MỚI LÊN SÓNG</small>
+                            <h1>Các bộ truyện vừa được cập nhật chương mới</h1>
+                            <p>Theo dõi ngay những bộ truyện audio vừa có tập mới phát hành gần đây nhất.</p>
+                        </div>
+                        <a href="/thu-vien?sort=updated">Xem tất cả chương mới →</a>
+                    </div>
+                    <div class="story-grid grid gap-5">
+                        @foreach (var story in (updatedStories.Length > 0 ? updatedStories : newestStories).Take(8))
+                        {
+                            var latestEpNo = Ui.Num(story, "latestEpisodeNumber");
+                            var latestEpTitle = Ui.Str(story, "latestEpisodeTitle");
+                            var timeAgo = Ui.TimeAgo(Ui.Str(story, "latestEpisodeAt"));
+                            <a class="story-card group transition-all duration-200" href="@StoryUrl(story)">
+                                <div class="cover">
+                                    <span class="cover-fallback">◈</span>
+                                    @if (!string.IsNullOrWhiteSpace(Ui.Str(story, "cover_url")))
+                                    {
+                                        <img src="@Ui.Str(story, "cover_url")" alt="@Ui.Str(story, "title")" loading="lazy" />
+                                    }
+                                    <span class="cover-badge cover-badge-new">@(latestEpNo > 0 ? $"Tập {latestEpNo} · MỚI" : "MỚI")</span>
+                                    @if (!string.IsNullOrEmpty(timeAgo))
+                                    {
+                                        <span class="cover-badge-time">@timeAgo</span>
+                                    }
+                                    <span class="cover-play"><AppIcon Name="play" Size="19" /></span>
+                                </div>
+                                <h3>@Ui.Str(story, "title")</h3>
+                                @if (latestEpNo > 0)
+                                {
+                                    <div class="latest-ep-pill" title="@latestEpTitle">♫ @(string.IsNullOrWhiteSpace(latestEpTitle) ? $"Tập {latestEpNo}" : latestEpTitle)</div>
+                                }
+                                else
+                                {
+                                    <p>@Ui.Str(story, "author")</p>
+                                }
+                                <div class="story-meta">@Ui.Str(story, "genres") · @Ui.Num(story, "episodeCount") tập</div>
+                                <div class="story-trends"><span>◉ @Ui.Num(story, "listenerCount") người nghe</span> <span>★ @Ui.Str(story, "ratingAverage")</span></div>
+                            </a>
+                        }
+                    </div>
+                    @if (stories.Length == 0)
+                    {
+                        <div class="empty">Chưa có truyện nào được phát hành. Admin có thể tạo bộ truyện và tải MP3 tại Dashboard.</div>
+                    }
+                </section>
+
+                @if (newestStories.Length > 0)
                 {
-                    <section class="section"><div class="section-heading flex flex-wrap items-end justify-between gap-4"><div><small>ĐƯỢC QUAN TÂM</small><h2>Truyện xem nhiều nhất</h2><p>Chỉ tính tài khoản đã nghe thực tế hơn 5 phút trong bộ truyện.</p></div><a href="/thu-vien">Xem thư viện →</a></div>
-                        <div class="story-grid grid gap-5">@foreach(var story in popularStories.Where(x=>Ui.Num(x,"listenerCount")>0).Take(8))
-                        {<a class="story-card group transition-all duration-200" href="@StoryUrl(story)"><div class="cover"><span class="cover-fallback">◈</span>@if(!string.IsNullOrEmpty(Ui.Str(story,"cover_url"))){<img src="@Ui.Str(story,"cover_url")" alt="@Ui.Str(story,"title")" loading="lazy" />}</div>
-                        <h3>@Ui.Str(story,"title")</h3><p>@Ui.Str(story,"author")</p><div class="story-meta">@Ui.Str(story,"genres")</div><div class="story-trends"><span>◉ @Ui.Num(story,"listenerCount") người nghe</span><span>★ @Ui.Str(story,"ratingAverage")</span></div></a>}
+                    <section class="section">
+                        <div class="section-heading flex flex-wrap items-end justify-between gap-4">
+                            <div>
+                                <small>KHO TRUYỆN MỚI</small>
+                                <h2>Nghe truyện audio mới tại Lăng Kính Hư Không</h2>
+                                <p>Nghe audio truyện tiên hiệp, kiếm hiệp, xuyên không và huyền huyễn bằng giọng đọc tiếng Việt.</p>
+                            </div>
+                            <a href="/thu-vien?sort=new">Tất cả truyện →</a>
+                        </div>
+                        <div class="story-grid grid gap-5">
+                            @foreach (var story in newestStories.Take(8))
+                            {
+                                <a class="story-card group transition-all duration-200" href="@StoryUrl(story)">
+                                    <div class="cover">
+                                        <span class="cover-fallback">◈</span>
+                                        @if (!string.IsNullOrWhiteSpace(Ui.Str(story, "cover_url")))
+                                        {
+                                            <img src="@Ui.Str(story, "cover_url")" alt="@Ui.Str(story, "title")" loading="lazy" />
+                                        }
+                                        <span class="cover-play"><AppIcon Name="play" Size="19" /></span>
+                                    </div>
+                                    <h3>@Ui.Str(story, "title")</h3>
+                                    <p>@Ui.Str(story, "author")</p>
+                                    <div class="story-meta">@Ui.Str(story, "genres") · @Ui.Num(story, "episodeCount") tập</div>
+                                    <div class="story-trends"><span>◉ @Ui.Num(story, "listenerCount") người nghe</span> <span>★ @Ui.Str(story, "ratingAverage")</span></div>
+                                </a>
+                            }
                         </div>
                     </section>
                 }
-                @if (history.Length > 0) { <section class="section"><div class="section-heading flex flex-wrap items-end justify-between gap-4"><div><small>QUAY LẠI THẾ GIỚI TRUYỆN</small><h2>Nghe tiếp</h2></div><a href="/lich-su">Xem tất cả →</a></div><div class="history-list">@foreach(var item in history.Take(3)) { <button class="history-item" @onclick="() => OpenHistory(item)"><span class="history-icon"><AppIcon Name="play" Size="18" /></span><span><b>@Ui.Str(item,"story_title")</b><small>@Ui.Str(item,"episode_title") · @Ui.Duration(Ui.Num(item,"seconds"))</small></span><span class="icon-chevron">›</span></button> }</div></section> }
+
+                @if (popularStories.Length > 0)
+                {
+                    <section class="section">
+                        <div class="section-heading flex flex-wrap items-end justify-between gap-4">
+                            <div>
+                                <small>ĐƯỢC QUAN TÂM</small>
+                                <h2>Top nghe nhiều</h2>
+                                <p>Bảng xếp hạng các bộ truyện được thính giả nghe nhiều và yêu thích nhất.</p>
+                            </div>
+                            <a href="/thu-vien?sort=popular">Xem bảng xếp hạng →</a>
+                        </div>
+                        <div class="story-grid grid gap-5">
+                            @for (var rankIdx = 0; rankIdx < Math.Min(8, popularStories.Length); rankIdx++)
+                            {
+                                var story = popularStories[rankIdx];
+                                var rankNo = rankIdx + 1;
+                                <a class="story-card group transition-all duration-200" href="@StoryUrl(story)">
+                                    <div class="cover">
+                                        <span class="cover-fallback">◈</span>
+                                        @if (!string.IsNullOrEmpty(Ui.Str(story, "cover_url")))
+                                        {
+                                            <img src="@Ui.Str(story, "cover_url")" alt="@Ui.Str(story, "title")" loading="lazy" />
+                                        }
+                                        <span class="cover-badge cover-badge-rank @(rankNo <= 3 ? $"rank-{rankNo}" : "")">@(rankNo <= 3 ? $"TOP {rankNo}" : $"#{rankNo}")</span>
+                                        <span class="cover-play"><AppIcon Name="play" Size="19" /></span>
+                                    </div>
+                                    <h3>@Ui.Str(story, "title")</h3>
+                                    <p>@Ui.Str(story, "author")</p>
+                                    <div class="story-meta">@Ui.Str(story, "genres") · @Ui.Num(story, "episodeCount") tập</div>
+                                    <div class="story-trends"><span>◉ @Ui.Num(story, "listenerCount") người nghe</span><span>★ @Ui.Str(story, "ratingAverage")</span></div>
+                                </a>
+                            }
+                        </div>
+                    </section>
+                }
+
+                <section class="section">
+                    <div class="section-heading flex flex-wrap items-end justify-between gap-4">
+                        <div>
+                            <small>QUAY LẠI THẾ GIỚI TRUYỆN</small>
+                            <h2>Lịch sử xem &amp; nghe gần đây</h2>
+                        </div>
+                        <a href="/lich-su">Xem tất cả →</a>
+                    </div>
+                    @if (!isAuthenticated)
+                    {
+                        <div class="empty history-empty-inline">
+                            <span>Đăng nhập để tự động lưu lịch sử xem truyện và vị trí tập đang nghe.</span>
+                            <button type="button" class="btn btn-outline btn-sm" @onclick='() => authMode = "login"'>Đăng nhập ngay</button>
+                        </div>
+                    }
+                    else if (history.Length == 0)
+                    {
+                        <div class="empty history-empty-inline">Bạn chưa xem hoặc nghe bộ truyện nào gần đây. Hãy mở một bộ truyện bất kỳ để lưu lịch sử.</div>
+                    }
+                    else
+                    {
+                        <div class="history-grid">
+                            @foreach (var item in history.Take(6))
+                            {
+                                var epTitle = Ui.Str(item, "episode_title");
+                                var listenedSec = Ui.Num(item, "seconds");
+                                var ago = Ui.TimeAgo(Ui.Str(item, "updated_at"));
+                                <button class="history-item history-card" @onclick="() => OpenHistory(item)">
+                                    <span class="history-thumb">
+                                        @if (!string.IsNullOrWhiteSpace(Ui.Str(item, "cover_url")))
+                                        {
+                                            <img src="@Ui.Str(item, "cover_url")" alt="@Ui.Str(item, "story_title")" loading="lazy" />
+                                        }
+                                        else
+                                        {
+                                            <AppIcon Name="play" Size="18" />
+                                        }
+                                    </span>
+                                    <span>
+                                        <b>@Ui.Str(item, "story_title")</b>
+                                        <small>@(epTitle != "" ? $"{epTitle} · Đã nghe {Ui.Duration(listenedSec)}" : "Đã xem chi tiết truyện")@(ago != "" ? $" · {ago}" : "")</small>
+                                    </span>
+                                    <span class="icon-chevron">›</span>
+                                </button>
+                            }
+                        </div>
+                    }
+                </section>
             }
             else if (page == "library")
             {
+                var currentLibraryList = sortMode switch
+                {
+                    "popular" => popularStories,
+                    "new" => newestStories,
+                    _ => updatedStories.Length > 0 ? updatedStories : newestStories
+                };
                 <section class="section top-section"><div class="section-heading flex flex-wrap items-end justify-between gap-4"><div><small>KHÁM PHÁ</small><h1>@(genre == "" ? "Thư viện truyện audio Lăng Kính Hư Không" : $"Nghe truyện {GenreName} audio")</h1><p>Đọc giới thiệu truyện audio, chọn thể loại và nghe audio ngay tại Lăng Kính Hư Không.</p></div></div>
                 <div class="genre-tabs"><a class="genre @(genre==""?"selected":"")" href="/thu-vien">Tất cả</a>
                     @foreach (var g in genreCatalog)
@@ -110,9 +271,13 @@
                         <a class="@(genre == genreSlug ? "genre selected" : "genre")"
                                 href="@($"/the-loai/{Uri.EscapeDataString(genreSlug)}")">@Ui.Str(g, "name")</a>
                     }</div>
-                <div class="sort-tabs"><button class="genre @(sortMode=="new"?"selected":"")" @onclick='() => sortMode="new"'>Mới nhất</button><button class="genre @(sortMode=="popular"?"selected":"")" @onclick='() => sortMode="popular"'>Xem nhiều nhất</button></div>
-                <div class="story-grid grid gap-5">@foreach (var story in (sortMode=="popular" ? popularStories : newestStories).Where(Matches)) { <a class="story-card group transition-all duration-200" href="@StoryUrl(story)"><div class="cover"><span class="cover-fallback">◈</span>@if(!string.IsNullOrEmpty(Ui.Str(story,"cover_url"))){<img src="@Ui.Str(story,"cover_url")" alt="" loading="lazy"/>}</div><h3>@Ui.Str(story,"title")</h3><p>@Ui.Str(story,"author")</p><div class="story-meta">@Ui.Str(story,"genres") · @Ui.Num(story,"episodeCount") tập</div><div class="story-trends"><span>◉ @Ui.Num(story,"listenerCount") người nghe</span> <span>★ @Ui.Str(story,"ratingAverage")</span></div></a> }</div>
-                @if(!(sortMode=="popular" ? popularStories : newestStories).Any(Matches)){<div class="empty">Không có truyện phù hợp với bộ lọc.</div>}
+                <div class="sort-tabs">
+                    <button class="genre @(sortMode=="updated"?"selected":"")" @onclick='() => sortMode="updated"'>Chương mới cập nhật</button>
+                    <button class="genre @(sortMode=="new"?"selected":"")" @onclick='() => sortMode="new"'>Truyện mới đăng</button>
+                    <button class="genre @(sortMode=="popular"?"selected":"")" @onclick='() => sortMode="popular"'>Top nghe nhiều</button>
+                </div>
+                <div class="story-grid grid gap-5">@foreach (var story in currentLibraryList.Where(Matches)) { var latestEpNo = Ui.Num(story, "latestEpisodeNumber"); var latestEpTitle = Ui.Str(story, "latestEpisodeTitle"); <a class="story-card group transition-all duration-200" href="@StoryUrl(story)"><div class="cover"><span class="cover-fallback">◈</span>@if(!string.IsNullOrEmpty(Ui.Str(story,"cover_url"))){<img src="@Ui.Str(story,"cover_url")" alt="@Ui.Str(story,"title")" loading="lazy"/>}@if(sortMode=="updated" && latestEpNo > 0){<span class="cover-badge cover-badge-new">Tập @latestEpNo · MỚI</span>}<span class="cover-play"><AppIcon Name="play" Size="19" /></span></div><h3>@Ui.Str(story,"title")</h3>@if(sortMode=="updated" && latestEpNo > 0){<div class="latest-ep-pill" title="@latestEpTitle">♫ @(string.IsNullOrWhiteSpace(latestEpTitle) ? $"Tập {latestEpNo}" : latestEpTitle)</div>}else{<p>@Ui.Str(story,"author")</p>}<div class="story-meta">@Ui.Str(story,"genres") · @Ui.Num(story,"episodeCount") tập</div><div class="story-trends"><span>◉ @Ui.Num(story,"listenerCount") người nghe</span> <span>★ @Ui.Str(story,"ratingAverage")</span></div></a> }</div>
+                @if(!currentLibraryList.Any(Matches)){<div class="empty">Không có truyện phù hợp với bộ lọc.</div>}
                 </section>
             }
             else if (page == "story")
@@ -192,8 +357,8 @@
             }
             else if (page == "history")
             {
-                <section class="section top-section"><div class="section-heading flex flex-wrap items-end justify-between gap-4"><div><small>CÁ NHÂN</small><h1>Đã nghe gần đây</h1></div></div>
-                @if(!isAuthenticated){<div class="empty">Vui lòng đăng nhập để lưu lịch sử nghe.</div>}else if(history.Length==0){<div class="empty">Bạn chưa nghe tập truyện nào.</div>}else{<div class="history-list">@foreach(var item in history){<button class="history-item" @onclick="() => OpenHistory(item)"><span class="history-icon"><AppIcon Name="play" Size="18" /></span><span><b>@Ui.Str(item,"story_title")</b><small>@Ui.Str(item,"episode_title") · Đã nghe @Ui.Duration(Ui.Num(item,"seconds"))</small></span><span class="icon-chevron">›</span></button>}</div>}
+                <section class="section top-section"><div class="section-heading flex flex-wrap items-end justify-between gap-4"><div><small>CÁ NHÂN</small><h1>Lịch sử xem &amp; nghe gần đây</h1></div></div>
+                @if(!isAuthenticated){<div class="empty">Vui lòng đăng nhập để lưu lịch sử xem và nghe truyện.</div>}else if(history.Length==0){<div class="empty">Bạn chưa xem hoặc nghe tập truyện nào gần đây.</div>}else{<div class="history-grid">@foreach(var item in history){var epTitle = Ui.Str(item, "episode_title"); var listenedSec = Ui.Num(item, "seconds"); var ago = Ui.TimeAgo(Ui.Str(item, "updated_at"));<button class="history-item history-card" @onclick="() => OpenHistory(item)"><span class="history-thumb">@if (!string.IsNullOrWhiteSpace(Ui.Str(item, "cover_url"))) { <img src="@Ui.Str(item, "cover_url")" alt="@Ui.Str(item, "story_title")" loading="lazy" /> } else { <AppIcon Name="play" Size="18" /> }</span><span><b>@Ui.Str(item,"story_title")</b><small>@(epTitle != "" ? $"{epTitle} · Đã nghe {Ui.Duration(listenedSec)}" : "Đã xem chi tiết truyện")@(ago != "" ? $" · {ago}" : "")</small></span><span class="icon-chevron">›</span></button>}</div>}
                 </section>
             }
             else if (page == "account")
@@ -355,11 +520,11 @@
 @code {
     [Parameter] public string? Slug { get; set; }
     [Parameter] public string? GenreSlug { get; set; }
-    private string page="home", loadedRoute="__initial_route_pending__", prerenderedRoute="", search="", genre="", sortMode="new", authMode="", username="", password="", registerName="",registerPhone="",registerAddress="",authError="",message="";
+    private string page="home", loadedRoute="__initial_route_pending__", prerenderedRoute="", search="", genre="", sortMode="updated", authMode="", username="", password="", registerName="",registerPhone="",registerAddress="",authError="",message="";
     private readonly SemaphoreSlim routeGate = new(1, 1);
     private bool loading=true,busy=false,messageIsError=false,mobileMenuOpen=false,showFullDescription=false,catalogLoaded=false,sessionChecked=false;
     private JsonElement user,detail,playing,orderDetail;
-    private JsonElement[] stories=[],newestStories=[],popularStories=[],genreCatalog=[],reviews=[],history=[],episodes=[],orders=[];
+    private JsonElement[] stories=[],updatedStories=[],newestStories=[],popularStories=[],genreCatalog=[],reviews=[],history=[],episodes=[],orders=[];
     // Giữ playlist của bộ truyện đang nghe ngay cả khi người dùng đổi trang.
     private JsonElement[] playbackQueue=[];
     private bool autoNextEnabled=true;
@@ -386,7 +551,7 @@
     private string NavigationHeading => page switch
     {
         "home" => "Trang chủ", "library" => "Thư viện truyện",
-        "history" => "Nghe gần đây", "story" => "Chi tiết bộ truyện",
+        "history" => "Lịch sử xem & nghe", "story" => "Chi tiết bộ truyện",
         "premium" => "Gói Premium", "account" => "Hồ sơ cá nhân",
         "admin" => "Quản trị hệ thống", _ => "Lăng Kính Hư Không"
     };
@@ -445,8 +610,28 @@
             WITH ep_counts AS (
                 SELECT story_id, COUNT(*) AS cnt FROM episodes WHERE status='Published' GROUP BY story_id
             ),
+            latest_ep AS (
+                SELECT e.story_id,
+                       e.episode_number AS latest_ep_num,
+                       e.title AS latest_ep_title,
+                       e.created_at AS latest_ep_at
+                FROM episodes e
+                WHERE e.status='Published'
+                  AND e.id = (
+                      SELECT e2.id FROM episodes e2
+                      WHERE e2.story_id = e.story_id AND e2.status='Published'
+                      ORDER BY e2.created_at DESC, e2.episode_number DESC LIMIT 1
+                  )
+            ),
             listener_counts AS (
                 SELECT story_id, COUNT(*) AS cnt FROM story_listeners WHERE qualified_at IS NOT NULL GROUP BY story_id
+            ),
+            total_listeners AS (
+                SELECT story_id, COUNT(DISTINCT user_id) AS cnt FROM (
+                    SELECT sl.story_id, sl.user_id FROM story_listeners sl
+                    UNION
+                    SELECT ep.story_id, lp.user_id FROM listening_progress lp JOIN episodes ep ON ep.id = lp.episode_id
+                ) GROUP BY story_id
             ),
             review_stats AS (
                 SELECT story_id, COUNT(*) AS cnt, ROUND(AVG(stars),1) AS avg_stars FROM story_reviews WHERE status='Visible' GROUP BY story_id
@@ -459,17 +644,33 @@
             CASE WHEN s.cover_file<>'' THEN '/api/stories/' || s.id || '/cover' ELSE s.cover_url END AS cover_url,s.status,
             COALESCE(gl.names,'') AS genres,
             COALESCE(ec.cnt,0) AS episodeCount,
+            COALESCE(le.latest_ep_num,0) AS latestEpisodeNumber,
+            COALESCE(le.latest_ep_title,'') AS latestEpisodeTitle,
+            COALESCE(le.latest_ep_at, s.updated_at, s.created_at) AS latestEpisodeAt,
             COALESCE(lc.cnt,0) AS listenerCount,
+            COALESCE(tl.cnt,0) AS activeListenerCount,
             COALESCE(rs.cnt,0) AS ratingCount,
             COALESCE(rs.avg_stars,0) AS ratingAverage
             FROM stories s
             LEFT JOIN genre_list gl ON gl.story_id=s.id
             LEFT JOIN ep_counts ec ON ec.story_id=s.id
+            LEFT JOIN latest_ep le ON le.story_id=s.id
             LEFT JOIN listener_counts lc ON lc.story_id=s.id
+            LEFT JOIN total_listeners tl ON tl.story_id=s.id
             LEFT JOIN review_stats rs ON rs.story_id=s.id
             WHERE s.status='Published' ORDER BY s.created_at DESC LIMIT 200");
         newestStories = published.Select(x => JsonSerializer.SerializeToElement(x)).ToArray();
-        popularStories = published.OrderByDescending(x => x.N("listenerCount"))
+        var withEpisodes = published.Where(x => x.N("episodeCount") > 0).ToList();
+        updatedStories = (withEpisodes.Count > 0 ? withEpisodes : published)
+            .OrderByDescending(x => x.S("latestEpisodeAt"))
+            .ThenByDescending(x => x.S("updated_at"))
+            .Select(x => JsonSerializer.SerializeToElement(x)).ToArray();
+        popularStories = published
+            .OrderByDescending(x => x.N("listenerCount"))
+            .ThenByDescending(x => x.N("activeListenerCount"))
+            .ThenByDescending(x => double.TryParse(x.S("ratingAverage"), System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var r) ? r : 0)
+            .ThenByDescending(x => x.N("episodeCount"))
+            .ThenByDescending(x => x.S("latestEpisodeAt"))
             .Select(x => JsonSerializer.SerializeToElement(x)).ToArray();
         stories = newestStories;
         genreCatalog = (await db.ListAsync("SELECT slug,name FROM genres WHERE is_active=1 ORDER BY sort_order,name"))
@@ -480,10 +681,38 @@
     private async Task LoadListeningFromDbAsync(SqliteConnection db)
     {
         if (!isAuthenticated || string.IsNullOrEmpty(CurrentUserId)) { history = []; return; }
-        var rows = await db.ListAsync(@"SELECT p.episode_id,p.seconds,p.updated_at,e.title AS episode_title,s.title AS story_title,s.slug,
-            CASE WHEN s.cover_file<>'' THEN '/api/stories/' || s.id || '/cover' ELSE s.cover_url END AS cover_url
-            FROM listening_progress p JOIN episodes e ON e.id=p.episode_id JOIN stories s ON s.id=e.story_id
-            WHERE p.user_id=@u ORDER BY p.updated_at DESC LIMIT 30", ("@u", CurrentUserId));
+        var rows = await db.ListAsync(@"
+            WITH latest_lp AS (
+                SELECT e.story_id, p.episode_id, p.seconds, p.updated_at, e.title AS episode_title, e.episode_number
+                FROM listening_progress p
+                JOIN episodes e ON e.id = p.episode_id
+                WHERE p.user_id = @u
+                  AND p.episode_id = (
+                      SELECT p2.episode_id FROM listening_progress p2
+                      JOIN episodes e2 ON e2.id = p2.episode_id
+                      WHERE p2.user_id = @u AND e2.story_id = e.story_id
+                      ORDER BY p2.updated_at DESC LIMIT 1
+                  )
+            ),
+            story_activity AS (
+                SELECT story_id, MAX(at) AS activity_at FROM (
+                    SELECT story_id, updated_at AS at FROM latest_lp
+                    UNION ALL
+                    SELECT story_id, viewed_at AS at FROM user_story_views WHERE user_id = @u
+                ) GROUP BY story_id
+            )
+            SELECT COALESCE(lp.episode_id, '') AS episode_id,
+                   COALESCE(lp.seconds, 0) AS seconds,
+                   sa.activity_at AS updated_at,
+                   COALESCE(lp.episode_title, '') AS episode_title,
+                   COALESCE(lp.episode_number, 0) AS episode_number,
+                   s.title AS story_title,
+                   s.slug,
+                   CASE WHEN s.cover_file<>'' THEN '/api/stories/' || s.id || '/cover' ELSE s.cover_url END AS cover_url
+            FROM story_activity sa
+            JOIN stories s ON s.id = sa.story_id AND s.status = 'Published'
+            LEFT JOIN latest_lp lp ON lp.story_id = sa.story_id
+            ORDER BY sa.activity_at DESC LIMIT 30", ("@u", CurrentUserId));
         history = rows.Select(x => JsonSerializer.SerializeToElement(x)).ToArray();
     }
 
@@ -500,6 +729,13 @@
         if (selected is not null)
         {
             var storyId = selected.S("id");
+            if (isAuthenticated && !string.IsNullOrEmpty(CurrentUserId))
+            {
+                await db.ExecAsync(@"INSERT INTO user_story_views(user_id,story_id,viewed_at) VALUES(@u,@s,@now)
+                    ON CONFLICT(user_id,story_id) DO UPDATE SET viewed_at=excluded.viewed_at",
+                    ("@u", CurrentUserId), ("@s", storyId), ("@now", Helpers.Now()));
+                await LoadListeningFromDbAsync(db);
+            }
             var list = await db.ListAsync("SELECT id,title,episode_number,duration_seconds,created_at FROM episodes WHERE story_id=@id AND status='Published' ORDER BY episode_number", ("@id", storyId));
             detail = JsonSerializer.SerializeToElement(new { story = selected, episodes = list });
             episodes = Ui.Array(Ui.Property(detail, "episodes"));
@@ -606,6 +842,27 @@
         genre = route.StartsWith("the-loai/", StringComparison.OrdinalIgnoreCase)
             ? Uri.UnescapeDataString(route["the-loai/".Length..])
             : "";
+        if (page == "library")
+        {
+            try
+            {
+                var qIdx = Navigation.Uri.IndexOf('?');
+                if (qIdx >= 0)
+                {
+                    var query = Navigation.Uri[(qIdx + 1)..].Split('#')[0];
+                    foreach (var part in query.Split('&', StringSplitOptions.RemoveEmptyEntries))
+                    {
+                        var kv = part.Split('=', 2);
+                        if (kv.Length == 2 && kv[0].Equals("sort", StringComparison.OrdinalIgnoreCase))
+                        {
+                            var val = Uri.UnescapeDataString(kv[1]).ToLowerInvariant();
+                            if (val is "updated" or "new" or "popular") sortMode = val;
+                        }
+                    }
+                }
+            }
+            catch { }
+        }
     }
 
     private void HandleLocationChanged(object? sender, LocationChangedEventArgs args)
@@ -643,9 +900,9 @@
         try
         {
             var route = CurrentRoute();
-            if (loadedRoute == route) return;
-            loadedRoute = route;
             UpdatePageFromUrl();
+            if (loadedRoute == route) { StateHasChanged(); return; }
+            loadedRoute = route;
 
             // If server initialization already loaded the exact route & session, do not wipe UI or re-query!
             if (prerenderedRoute == route && catalogLoaded && sessionChecked)
