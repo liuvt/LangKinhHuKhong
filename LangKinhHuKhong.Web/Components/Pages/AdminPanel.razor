@@ -222,8 +222,7 @@
                                         <td>@Ui.Date(Ui.Str(tf, "updated_at") != "" ? Ui.Str(tf, "updated_at") : Ui.Str(tf, "created_at"))</td>
                                         <td>
                                             <div class="table-actions">
-                                                <button class="btn btn-sm btn-primary" disabled="@busy" @onclick="() => OpenInNotepad(tfId)">✎ Sửa Notepad</button>
-                                                <button class="btn btn-sm btn-outline" disabled="@busy" @onclick="() => PreviewTextFile(tfId)">Xem nhanh</button>
+                                                <button class="btn btn-sm btn-primary" disabled="@busy" @onclick="() => OpenInNotepad(tfId)">✎ Chi tiết</button>
                                                 <a class="btn btn-sm btn-outline" href="/api/admin/texts/@Uri.EscapeDataString(tfId)/download" target="_blank" rel="noopener">↓ Tải về</a>
                                                 @if (driveId != "")
                                                 {
@@ -236,22 +235,6 @@
                                 }
                             </tbody>
                         </table>
-                    </div>
-                }
-                @if (previewTextId != "")
-                {
-                    <div class="inline-editor text-preview-panel">
-                        <div class="episode-list-toolbar">
-                            <div>
-                                <h3>📄 @previewTextFileName</h3>
-                                <small>@Ui.FileSize(previewTextSize) · @(previewTextTruncated ? "Đang hiển thị 256 KB đầu tiên (tải về để xem toàn bộ)" : "Hiển thị toàn bộ nội dung")</small>
-                            </div>
-                            <div class="table-actions">
-                                <a class="btn btn-sm btn-primary" href="/api/admin/texts/@Uri.EscapeDataString(previewTextId)/download" target="_blank" rel="noopener">↓ Tải file gốc</a>
-                                <button class="btn btn-sm btn-outline" @onclick='() => { previewTextId = ""; previewTextContent = ""; }'>Đóng</button>
-                            </div>
-                        </div>
-                        <pre class="story-text-preview-box">@previewTextContent</pre>
                     </div>
                 }
             </div>
@@ -342,7 +325,7 @@
                             </small>
                         </div>
                         <div class="table-actions">
-                            <button class="btn btn-sm btn-primary" disabled="@busy" @onclick="StartNewDriveDirectNotepad">+ Tạo file .txt/.md trực tiếp trong thư mục này</button>
+                            <button class="btn btn-sm btn-primary" disabled="@busy" @onclick="StartNewDriveDirectNotepad">+ Soạn mới trong thư mục này</button>
                             <button class="btn btn-sm btn-outline" disabled="@busy" @onclick="() => BrowseDriveFolder(driveCurrentFolderId, driveCurrentFolderName)">↻ Làm mới Drive</button>
                         </div>
                     </div>
@@ -400,7 +383,7 @@
                                                     }
                                                     else
                                                     {
-                                                        <button class="btn btn-sm btn-primary" disabled="@busy" @onclick="() => OpenDriveFileInNotepad(dId)">✎ Sửa trên Notepad</button>
+                                                        <button class="btn btn-sm btn-primary" disabled="@busy" @onclick="() => OpenDriveFileInNotepad(dId)">✎ Chi tiết</button>
                                                     }
                                                     @if (webLink != "")
                                                     {
@@ -541,7 +524,7 @@
                                     <td>@Ui.Date(Ui.Str(tf, "updated_at") != "" ? Ui.Str(tf, "updated_at") : Ui.Str(tf, "created_at"))</td>
                                     <td>
                                         <div class="table-actions">
-                                            <button class="btn btn-sm btn-primary" disabled="@busy" @onclick="() => OpenInNotepad(tfId)">✎ Mở Notepad</button>
+                                            <button class="btn btn-sm btn-primary" disabled="@busy" @onclick="() => OpenInNotepad(tfId)">✎ Chi tiết</button>
                                             <a class="btn btn-sm btn-outline" href="/api/admin/texts/@Uri.EscapeDataString(tfId)/download" target="_blank" rel="noopener">↓ Tải về</a>
                                             @if (driveId != "")
                                             {
@@ -567,69 +550,6 @@
                 </div>
             }
         </div>
-
-        @if (notepadOpen)
-        {
-            <div class="panel top-margin rounded-2xl notepad-editor-shell">
-                <div class="episode-list-toolbar">
-                    <div>
-                        <h2>@(notepadDriveOnlyMode ? (notepadDriveFileId == "" ? "☁ Tạo file mới trực tiếp trong thư mục Google Drive" : $"☁ Đang sửa trực tiếp trên Google Drive: {notepadFileName}") : (notepadFileId == "" ? $"📝 Tạo file chữ mới — {TargetBadgeText(notepadStorageTarget)}" : $"✎ Đang chỉnh sửa ({TargetBadgeText(notepadStorageTarget)}): {notepadFileName}"))</h2>
-                        <small>@(notepadDriveOnlyMode ? "Chế độ sửa trực tiếp trong trình duyệt thư mục Google Drive" : (notepadFileId == "" ? $"Nhập nội dung văn bản bên dưới và bấm Lưu để tạo file trên {TargetDisplayLabel(notepadStorageTarget)}" : $"Cập nhật lần cuối: {Ui.Date(notepadUpdatedAt)} · Dung lượng: {Ui.FileSize(notepadSizeBytes)}"))</small>
-                    </div>
-                    <div class="table-actions">
-                        <button class="btn btn-primary" disabled="@(busy || savingNotepad)" @onclick="SaveNotepadFile">@(savingNotepad ? "⏳ Đang lưu..." : (notepadDriveOnlyMode ? "☁ Lưu lên Google Drive" : (notepadStorageTarget == "both" ? "⇄ Lưu cả VPS & Drive (Dự phòng)" : (notepadStorageTarget == "drive" ? "☁ Lưu lên Google Drive" : "💾 Lưu lên VPS"))))</button>
-                        <button class="btn btn-outline" disabled="@busy" @onclick="CopyNotepadText">📋 Sao chép toàn bộ</button>
-                        @if (!notepadDriveOnlyMode && notepadFileId != "")
-                        {
-                            <button class="btn btn-outline" disabled="@busy" @onclick="() => OpenInNotepad(notepadFileId)">↻ Tải lại bản gốc</button>
-                            <a class="btn btn-outline" href="/api/admin/texts/@Uri.EscapeDataString(notepadFileId)/download" target="_blank" rel="noopener">↓ Tải về máy</a>
-                        }
-                        <button class="btn btn-outline" disabled="@busy" @onclick="CloseNotepad">× Đóng Notepad</button>
-                    </div>
-                </div>
-
-                <div class="upload-grid top-margin">
-                    @if (!notepadDriveOnlyMode)
-                    {
-                        <label>Thuộc bộ truyện
-                            <select @bind="notepadStoryId">
-                                <option value="">-- Chọn bộ truyện --</option>
-                                @foreach (var s in storyRows)
-                                {
-                                    <option value="@Ui.Str(s, "id")">@Ui.Str(s, "title")</option>
-                                }
-                            </select>
-                        </label>
-                        <label>Luồng lưu trữ đích (Cho phép chuyển đổi khi Lưu)
-                            <select @bind="notepadStorageTarget">
-                                <option value="vps">💾 Chỉ lưu trên VPS (Ổ đĩa máy chủ)</option>
-                                <option value="drive">☁ Chỉ lưu trên Google Drive</option>
-                                <option value="both">⇄ Giữ cả VPS &amp; Google Drive (Dự phòng)</option>
-                            </select>
-                        </label>
-                        <label>Tiêu đề / Ghi chú
-                            <input @bind="notepadTitle" maxlength="180" placeholder="Ví dụ: Chương 1 - Mở đầu" />
-                        </label>
-                    }
-                    <label>Tên file lưu trữ (.md hoặc .txt)
-                        <input @bind="notepadFileName" maxlength="200" placeholder="chuong-01.txt" />
-                    </label>
-                    <label>Định dạng
-                        <select @bind="notepadExtension">
-                            <option value=".txt">.TXT (Text thuần)</option>
-                            <option value=".md">.MD (Markdown)</option>
-                        </select>
-                    </label>
-                </div>
-
-                <div class="notepad-statusbar">
-                    <span id="admin-notepad-stats" class="mono">1 dòng · 0 từ · 0 ký tự</span>
-                    <span>Mã hóa: <b>UTF-8</b> · Luồng lưu trữ: <b>@(notepadDriveOnlyMode ? "☁ Google Drive" : TargetDisplayLabel(notepadStorageTarget))</b> · Phím <code>Tab</code> hỗ trợ thụt lề 2 khoảng trắng</span>
-                </div>
-
-                <textarea id="admin-notepad-editor" class="online-notepad-textarea" spellcheck="false" placeholder="Nhập hoặc dán nội dung văn bản (.md / .txt) tại đây..."></textarea>
-            </div>
-        }
     }
     else if(tab=="genres")
     {
@@ -724,6 +644,71 @@
     else if(tab=="audit")
     {
         <div class="panel rounded-2xl"><h2>Nhật ký quản trị gần đây</h2><div class="table-scroll overflow-x-auto"><table><thead><tr><th>Ngày</th><th>Hành động</th><th>Đối tượng</th><th>Thông tin</th></tr></thead><tbody>@foreach(var log in auditRows){<tr><td>@Ui.Date(Ui.Str(log,"created_at"))</td><td class="mono">@Ui.Str(log,"action")</td><td class="mono">@Ui.Str(log,"subject_id")</td><td>@Ui.Str(log,"details")</td></tr>}</tbody></table></div></div>
+    }
+
+    @if (notepadOpen)
+    {
+        <div class="overlay backdrop-blur-sm notepad-dialog-overlay" @onclick="CloseNotepad">
+            <div class="notepad-dialog panel rounded-2xl notepad-editor-shell" role="dialog" aria-modal="true" @onclick:stopPropagation="true">
+                <div class="episode-list-toolbar notepad-dialog-header">
+                    <div>
+                        <h2>@(notepadDriveOnlyMode ? (notepadDriveFileId == "" ? "☁ Soạn mới trực tiếp trong thư mục Google Drive" : $"☁ Chi tiết file trên Google Drive: {notepadFileName}") : (notepadFileId == "" ? $"📝 Soạn mới bản thảo — {TargetBadgeText(notepadStorageTarget)}" : $"✎ Chi tiết & Soạn thảo ({TargetBadgeText(notepadStorageTarget)}): {notepadFileName}"))</h2>
+                        <small>@(notepadDriveOnlyMode ? "Chế độ soạn thảo trực tiếp trong thư mục Google Drive" : (notepadFileId == "" ? $"Nhập nội dung văn bản bên dưới và bấm Lưu để tạo file trên {TargetDisplayLabel(notepadStorageTarget)}" : $"Cập nhật lần cuối: {Ui.Date(notepadUpdatedAt)} · Dung lượng: {Ui.FileSize(notepadSizeBytes)}"))</small>
+                    </div>
+                    <div class="table-actions">
+                        <button class="btn btn-primary" disabled="@(busy || savingNotepad)" @onclick="SaveNotepadFile">@(savingNotepad ? "⏳ Đang lưu..." : (notepadDriveOnlyMode ? "☁ Lưu lên Google Drive" : (notepadStorageTarget == "both" ? "⇄ Lưu cả VPS & Drive (Dự phòng)" : (notepadStorageTarget == "drive" ? "☁ Lưu lên Google Drive" : "💾 Lưu lên VPS"))))</button>
+                        <button class="btn btn-outline" disabled="@busy" @onclick="CopyNotepadText">📋 Sao chép toàn bộ</button>
+                        @if (!notepadDriveOnlyMode && notepadFileId != "")
+                        {
+                            <button class="btn btn-outline" disabled="@busy" @onclick="() => OpenInNotepad(notepadFileId)">↻ Tải lại bản gốc</button>
+                            <a class="btn btn-outline" href="/api/admin/texts/@Uri.EscapeDataString(notepadFileId)/download" target="_blank" rel="noopener">↓ Tải về máy</a>
+                        }
+                        <button class="btn btn-outline" disabled="@busy" @onclick="CloseNotepad">× Đóng</button>
+                    </div>
+                </div>
+
+                <div class="upload-grid top-margin notepad-dialog-meta">
+                    @if (!notepadDriveOnlyMode)
+                    {
+                        <label>Thuộc bộ truyện
+                            <select @bind="notepadStoryId">
+                                <option value="">-- Chọn bộ truyện --</option>
+                                @foreach (var s in storyRows)
+                                {
+                                    <option value="@Ui.Str(s, "id")">@Ui.Str(s, "title")</option>
+                                }
+                            </select>
+                        </label>
+                        <label>Luồng lưu trữ đích (Cho phép chuyển đổi khi Lưu)
+                            <select @bind="notepadStorageTarget">
+                                <option value="vps">💾 Chỉ lưu trên VPS (Ổ đĩa máy chủ)</option>
+                                <option value="drive">☁ Chỉ lưu trên Google Drive</option>
+                                <option value="both">⇄ Giữ cả VPS &amp; Google Drive (Dự phòng)</option>
+                            </select>
+                        </label>
+                        <label>Tiêu đề / Ghi chú
+                            <input @bind="notepadTitle" maxlength="180" placeholder="Ví dụ: Chương 1 - Mở đầu" />
+                        </label>
+                    }
+                    <label>Tên file lưu trữ (.md hoặc .txt)
+                        <input @bind="notepadFileName" maxlength="200" placeholder="chuong-01.txt" />
+                    </label>
+                    <label>Định dạng
+                        <select @bind="notepadExtension">
+                            <option value=".txt">.TXT (Text thuần)</option>
+                            <option value=".md">.MD (Markdown)</option>
+                        </select>
+                    </label>
+                </div>
+
+                <div class="notepad-statusbar">
+                    <span id="admin-notepad-stats" class="mono">1 dòng · 0 từ · 0 ký tự</span>
+                    <span>Mã hóa: <b>UTF-8</b> · Luồng lưu trữ: <b>@(notepadDriveOnlyMode ? "☁ Google Drive" : TargetDisplayLabel(notepadStorageTarget))</b> · Phím <code>Tab</code> hỗ trợ thụt lề 2 khoảng trắng</span>
+                </div>
+
+                <textarea id="admin-notepad-editor" class="online-notepad-textarea" spellcheck="false" placeholder="Nhập hoặc dán nội dung văn bản (.md / .txt) tại đây..."></textarea>
+            </div>
+        </div>
     }
 </section>
 
@@ -1480,7 +1465,6 @@
     private async Task StartNewNotepadForStory(string preferredStoryId, string storageTarget = "vps")
     {
         if (busy) return;
-        tab = "notepad";
         notepadDriveOnlyMode = false;
         notepadDriveFileId = "";
         notepadFileId = "";
@@ -1501,7 +1485,6 @@
     {
         if (string.IsNullOrWhiteSpace(textId) || busy) return;
         busy = true;
-        tab = "notepad";
         notepadDriveOnlyMode = false;
         notepadDriveFileId = "";
         notepadOpen = true;
@@ -1521,7 +1504,7 @@
         }
         catch (Exception e)
         {
-            Notify("Không mở được file trên Notepad: " + e.Message, true);
+            Notify("Không mở được chi tiết file: " + e.Message, true);
         }
         finally
         {
