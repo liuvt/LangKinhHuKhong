@@ -216,7 +216,7 @@ app.Use(async (ctx, next) =>
 // Public SEO endpoints. Only Published stories enter the XML sitemap.
 app.MapGet("/robots.txt", (SeoSiteSettings site) => Results.Text(
     "User-agent: *\nDisallow: /quan-tri\nDisallow: /tai-khoan\nDisallow: /lich-su\n" +
-    "Disallow: /api/auth/\nDisallow: /api/admin/\nDisallow: /api/orders\n" +
+    "Disallow: /lkhk-v1/\nDisallow: /api/auth/\nDisallow: /api/admin/\nDisallow: /api/orders\n" +
     "Disallow: /api/episodes/\nSitemap: " + site.Absolute("/sitemap.xml") + "\n",
     "text/plain; charset=utf-8"));
 app.MapGet("/sitemap.xml", async (Database source, SeoSiteSettings site) =>
@@ -230,6 +230,16 @@ app.MapGet("/sitemap-stories-{page:int}.xml", async Task<IResult> (int page, Dat
 });
 
 app.MapGet("/api/health", () => Results.Ok(new { status = "ok", app = "Lăng Kính Hư Không", now = Helpers.Now() }));
+app.MapMethods(SePayWebhook.WebhookPath, ["GET", "HEAD"], (Database source, IConfiguration config) =>
+    Results.Ok(new
+    {
+        success = true,
+        endpoint = SePayWebhook.WebhookPath,
+        auth = "HMAC-SHA256 (X-SePay-Signature)",
+        configured = !string.IsNullOrWhiteSpace(SePayWebhook.ResolveSecret(source, config))
+    }));
+app.MapPost(SePayWebhook.WebhookPath, async Task<IResult> (HttpContext ctx, Database source, IConfiguration config) =>
+    await SePayWebhook.HandleWebhookAsync(ctx, source, config)).DisableAntiforgery();
 app.MapGet("/api/auth/csrf", (HttpContext ctx, IAntiforgery anti) => Results.Ok(new { token = anti.GetAndStoreTokens(ctx).RequestToken }));
 app.MapPost("/api/auth/register", async Task<IResult> (RegisterReq req, HttpContext ctx, Database source, IPasswordHasher<AppUser> hasher, IAntiforgery anti) =>
 {
@@ -660,7 +670,7 @@ app.MapPost("/api/orders", async Task<IResult> (HttpContext ctx, Database source
     var bank = await db.FirstAsync("SELECT * FROM bank_receivers WHERE is_active=1 AND is_default=1");
     if (plan is null || bank is null || string.IsNullOrWhiteSpace(bank.S("bank_bin")) || string.IsNullOrWhiteSpace(bank.S("account_number")) || string.IsNullOrWhiteSpace(bank.S("account_name")))
         return Results.BadRequest(new { error = "Admin chưa thiết lập tài khoản nhận thanh toán." });
-    var code = "LKH" + DateTimeOffset.UtcNow.ToString("yyMMddHHmmss") + Guid.NewGuid().ToString("N")[..8].ToUpperInvariant();
+    var code = "LKH" + DateTimeOffset.UtcNow.ToString("yyMMdd") + Guid.NewGuid().ToString("N")[..6].ToUpperInvariant();
     var id = Helpers.Id();
     await db.ExecAsync(@"INSERT INTO orders(id,code,user_id,plan_id,amount_vnd,duration_months,bank_receiver_id,bank_bin,bank_name,account_number,account_name,status,created_at,expires_at)
         VALUES(@id,@code,@user,@plan,@amount,@months,@bankId,@bin,@bank,@account,@name,'Pending',@now,@expire)",
@@ -2476,6 +2486,22 @@ admin.MapGet("/audit", async Task<IResult> (Database source) =>
     await using var db = await source.OpenAsync();
     return Results.Ok(await db.ListAsync("SELECT id,actor_id,action,subject_id,details,created_at FROM audit_logs ORDER BY created_at DESC LIMIT 200"));
 });
+admin.MapGet("/sepay/status", (Database source, IConfiguration config, SeoSiteSettings site) =>
+    Results.Ok(SePayWebhook.GetStatus(source, config, site)));
+admin.MapPut("/sepay/secret", async Task<IResult> (SePaySecretReq req, HttpContext ctx, Database source, IConfiguration config, SeoSiteSettings site) =>
+{
+    if (string.IsNullOrWhiteSpace(req.Secret) || req.Secret.Trim().Length is < 10 or > 200)
+        return Bad("Secret Key không hợp lệ (từ 10 đến 200 ký tự).");
+    await SePayWebhook.SaveSecretAsync(source, req.Secret.Trim());
+    await using var db = await source.OpenAsync();
+    await Helpers.Audit(db, Helpers.UserId(ctx.User), "sepay.secret_update", "", "Updated SePay HMAC-SHA256 webhook secret");
+    return Results.Ok(SePayWebhook.GetStatus(source, config, site));
+});
+admin.MapGet("/sepay/logs", async Task<IResult> (Database source) =>
+{
+    await using var db = await source.OpenAsync();
+    return Results.Ok(await db.ListAsync("SELECT * FROM sepay_webhook_logs ORDER BY created_at DESC LIMIT 100"));
+});
 app.UseAntiforgery();
 app.MapStaticAssets();
 app.MapRazorComponents<App>().AddInteractiveServerRenderMode();
@@ -2694,3 +2720,4 @@ public record TextTransferReq(string Target);
 public record GDriveConfigReq(string? ClientId, string? ClientSecret, string? RootFolderId, string? RootFolderName);
 public record GDriveFolderCreateReq(string? ParentFolderId, string Name);
 public record GDriveFileSaveReq(string? DriveFileId, string? ParentFolderId, string FileName, string Title, string Content);
+public record SePaySecretReq(string Secret);

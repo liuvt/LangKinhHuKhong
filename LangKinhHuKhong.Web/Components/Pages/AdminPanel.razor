@@ -3,6 +3,8 @@
 @inject AudioStorage AudioStorage
 @inject GoogleDriveService GoogleDrive
 @inject NavigationManager Navigation
+@inject IConfiguration Config
+@inject SeoSiteSettings SiteSettings
 
 <section class="section top-section admin-page">
     <div class="section-heading"><div><small>ADMIN DASHBOARD</small><h1>Trung tâm quản trị</h1><p>Thành viên · Kho Audio · Gói Premium · Đơn hàng VietQR</p></div><button class="btn btn-outline" @onclick="Reload">↻ Tải lại</button></div>
@@ -639,7 +641,74 @@
     }
     else if(tab=="settings")
     {
-        <div class="panel form rounded-2xl" style="max-width:600px"><h2>Giá gói Premium</h2><label>Giá theo VNĐ / tháng<input type="number" @bind="premiumPrice" min="0" max="100000000" /></label><button class="btn btn-primary" @onclick="SavePrice">Cập nhật giá</button><p class="hint">Đơn đã tạo giữ nguyên giá tại thời điểm tạo QR. Tài khoản nhận tiền cấu hình ở mục Tài khoản QR.</p></div>
+        <div class="two-column">
+            <div class="panel form rounded-2xl">
+                <h2>Giá gói Premium</h2>
+                <label>Giá theo VNĐ / tháng<input type="number" @bind="premiumPrice" min="0" max="100000000" /></label>
+                <button class="btn btn-primary" disabled="@busy" @onclick="SavePrice">Cập nhật giá</button>
+                <p class="hint">Đơn đã tạo giữ nguyên giá tại thời điểm tạo QR. Tài khoản nhận tiền cấu hình ở mục Tài khoản QR.</p>
+            </div>
+            <div class="panel form rounded-2xl">
+                <h2>⚡ Webhook SePay (Tự động duyệt chuyển khoản)</h2>
+                <div class="meta-line"><span>Webhook URL</span><b class="mono">@Ui.Str(sepayStatus, "webhookUrl")</b></div>
+                <div class="meta-line"><span>Phương thức xác thực</span><b>HMAC-SHA256 (Header: <code class="mono">X-SePay-Signature</code>)</b></div>
+                <div class="meta-line"><span>Trạng thái Secret Key</span><b>@(Ui.Bool(sepayStatus, "configured") ? $"🟢 Đang hoạt động ({Ui.Str(sepayStatus, "maskedSecret")})" : "🔴 Chưa cấu hình")</b></div>
+                <label>Cập nhật Secret Key mới (từ SePay · bắt đầu bằng <code class="mono">whsec_...</code>)
+                    <input type="password" @bind="sepaySecretInput" maxlength="200" placeholder="whsec_..." autocomplete="off" />
+                </label>
+                <div class="table-actions">
+                    <button class="btn btn-primary" disabled="@busy" @onclick="SaveSePaySecret">Lưu Secret Key</button>
+                    <button class="btn btn-outline" disabled="@busy" @onclick="ReloadSePayLogs">↻ Làm mới nhật ký Webhook</button>
+                </div>
+                <p class="hint">SePay ký dữ liệu JSON bằng HMAC-SHA256 và gửi trong header <code>X-SePay-Signature</code>. Khi nhận giao dịch tiền vào khớp mã đơn <code>LKH...</code> và đủ số tiền, hệ thống tự động duyệt đơn và kích hoạt Premium.</p>
+            </div>
+        </div>
+        <div class="panel top-margin rounded-2xl">
+            <div class="episode-list-toolbar">
+                <div>
+                    <h2>Nhật ký Webhook SePay gần đây (@sepayLogRows.Length)</h2>
+                    <small>Theo dõi mọi thông báo chuyển khoản từ SePay gửi về <code>/lkhk-v1/sepay-payment</code></small>
+                </div>
+                <button class="btn btn-sm btn-outline" disabled="@busy" @onclick="ReloadSePayLogs">↻ Làm mới</button>
+            </div>
+            @if (sepayLogRows.Length == 0)
+            {
+                <p class="hint">Chưa có thông báo Webhook nào từ SePay.</p>
+            }
+            else
+            {
+                <div class="table-scroll overflow-x-auto">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>Thời gian</th>
+                                <th>Mã GD SePay</th>
+                                <th>Ngân hàng</th>
+                                <th>Số tiền</th>
+                                <th>Nội dung CK</th>
+                                <th>Mã đơn khớp</th>
+                                <th>Kết quả xử lý</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            @foreach (var row in sepayLogRows)
+                            {
+                                var st = Ui.Str(row, "process_status");
+                                <tr>
+                                    <td>@Ui.Date(Ui.Str(row, "created_at"))</td>
+                                    <td class="mono">#@Ui.Str(row, "sepay_tx_id")<small class="order-subtitle">@Ui.Str(row, "reference_code")</small></td>
+                                    <td><b>@Ui.Str(row, "gateway")</b><small class="order-subtitle">@Ui.Str(row, "account_number")</small></td>
+                                    <td><b>@Ui.Money(Ui.Num(row, "transfer_amount"))</b></td>
+                                    <td class="mono">@Ui.Str(row, "content")</td>
+                                    <td class="mono"><b>@(Ui.Str(row, "matched_order_code") != "" ? Ui.Str(row, "matched_order_code") : "—")</b></td>
+                                    <td><span class="pill @(st == "Confirmed" ? "storage-r2" : "")">@st</span></td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+            }
+        </div>
     }
     else if(tab=="audit")
     {
@@ -725,12 +794,12 @@
     private string textFileTitle="",previewTextId="",previewTextFileName="",previewTextContent="";
     private string notepadFilterStoryId="",notepadFilterStorageTarget="",notepadSearch="",notepadUploadStoryId="",notepadUploadTitle="";
     private string notepadFileId="",notepadDriveFileId="",notepadStoryId="",notepadStorageTarget="vps",notepadTitle="",notepadFileName="",notepadExtension=".txt",notepadUpdatedAt="",deleteNotepadFileId="",deleteNotepadFileName="",deleteNotepadStorageTarget="vps";
-    private string gdriveClientIdInput="",gdriveClientSecretInput="",gdriveRootFolderInput="LangKinhHuKhong-BanThao";
+    private string gdriveClientIdInput="",gdriveClientSecretInput="",gdriveRootFolderInput="LangKinhHuKhong-BanThao",sepaySecretInput="";
     private string driveCurrentFolderId="",driveCurrentFolderName="",driveNewFolderName="";
     private int previewTextSize=0,notepadSizeBytes=0;
     private bool previewTextTruncated=false;
-    private JsonElement stats,storageInfo,gdriveStatus;
-    private JsonElement[] storyRows=[],episodeRows=[],textFileRows=[],allTextFileRows=[],driveItems=[],userRows=[],orderRows=[],auditRows=[],genreRows=[],reviewRows=[];
+    private JsonElement stats,storageInfo,gdriveStatus,sepayStatus;
+    private JsonElement[] storyRows=[],episodeRows=[],textFileRows=[],allTextFileRows=[],driveItems=[],userRows=[],orderRows=[],auditRows=[],genreRows=[],reviewRows=[],sepayLogRows=[];
     private JsonElement[] FilteredAllTextFiles => allTextFileRows.Where(tf =>
         (string.IsNullOrWhiteSpace(notepadFilterStoryId) || Ui.Str(tf, "story_id") == notepadFilterStoryId) &&
         (string.IsNullOrWhiteSpace(notepadFilterStorageTarget) || NormalizeTarget(Ui.Str(tf, "storage_target")) == notepadFilterStorageTarget) &&
@@ -898,6 +967,9 @@
                 FROM orders o JOIN users u ON u.id=o.user_id LEFT JOIN users admin ON admin.id=o.reviewed_by
                 ORDER BY o.created_at DESC LIMIT 200")).Select(x => JsonSerializer.SerializeToElement(x)).ToArray();
             auditRows = (await db.ListAsync("SELECT id,actor_id,action,subject_id,details,created_at FROM audit_logs ORDER BY created_at DESC LIMIT 200"))
+                .Select(x => JsonSerializer.SerializeToElement(x)).ToArray();
+            sepayStatus = JsonSerializer.SerializeToElement(SePayWebhook.GetStatus(Database, Config, SiteSettings));
+            sepayLogRows = (await db.ListAsync("SELECT * FROM sepay_webhook_logs ORDER BY created_at DESC LIMIT 100"))
                 .Select(x => JsonSerializer.SerializeToElement(x)).ToArray();
             if (activeStoryId != "") await LoadEpisodes();
         }
@@ -1988,5 +2060,32 @@
         catch(Exception e){Notify(e.Message,true);}finally{busy=false;}
     }
     private async Task SavePrice(){try{await Api.Put("/admin/plans/premium",new{priceVnd=premiumPrice});Notify("Đã cập nhật giá Premium. Đơn cũ giữ nguyên giá.");}catch(Exception e){Notify(e.Message,true);}}
+    private async Task SaveSePaySecret()
+    {
+        if (string.IsNullOrWhiteSpace(sepaySecretInput)) { Notify("Hãy nhập Secret Key từ SePay (whsec_...).", true); return; }
+        busy = true;
+        try
+        {
+            sepayStatus = await Api.Put("/admin/sepay/secret", new { secret = sepaySecretInput.Trim() });
+            sepaySecretInput = "";
+            Notify("Đã cập nhật Secret Key HMAC-SHA256 cho Webhook SePay.");
+        }
+        catch (Exception e) { Notify(e.Message, true); }
+        finally { busy = false; }
+    }
+    private async Task ReloadSePayLogs()
+    {
+        busy = true;
+        try
+        {
+            sepayStatus = await Api.Get("/admin/sepay/status");
+            sepayLogRows = Ui.Array(await Api.Get("/admin/sepay/logs"));
+            orderRows = Ui.Array(await Api.Get("/admin/orders"));
+            stats = await Api.Get("/admin/stats");
+            Notify("Đã làm mới nhật ký Webhook SePay.");
+        }
+        catch (Exception e) { Notify(e.Message, true); }
+        finally { busy = false; }
+    }
     private sealed class StoryForm {public string Slug{get;set;}="";public string Title{get;set;}="";public string Author{get;set;}="";public string Genre{get;set;}="";public string[] Genres{get;set;}=[];public string Description{get;set;}="";public string CoverUrl{get;set;}="";public string Status{get;set;}="Draft";}
 }

@@ -216,3 +216,24 @@ CREATE TABLE IF NOT EXISTS story_text_files (
  updated_at TEXT NOT NULL DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS ix_story_text_files_story ON story_text_files(story_id, created_at DESC);
+
+-- V1.9.7: SePay webhook delivery logs & idempotency tracking.
+CREATE TABLE IF NOT EXISTS sepay_webhook_logs (
+ id TEXT PRIMARY KEY,
+ sepay_tx_id TEXT NOT NULL DEFAULT '',
+ gateway TEXT NOT NULL DEFAULT '',
+ transaction_date TEXT NOT NULL DEFAULT '',
+ account_number TEXT NOT NULL DEFAULT '',
+ transfer_type TEXT NOT NULL DEFAULT '',
+ transfer_amount INTEGER NOT NULL DEFAULT 0,
+ reference_code TEXT NOT NULL DEFAULT '',
+ payment_code TEXT NOT NULL DEFAULT '',
+ content TEXT NOT NULL DEFAULT '',
+ matched_order_id TEXT NOT NULL DEFAULT '',
+ matched_order_code TEXT NOT NULL DEFAULT '',
+ process_status TEXT NOT NULL DEFAULT '',
+ raw_json TEXT NOT NULL DEFAULT '',
+ created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS ix_sepay_webhook_logs_created ON sepay_webhook_logs(created_at DESC);
+CREATE INDEX IF NOT EXISTS ix_sepay_webhook_logs_tx ON sepay_webhook_logs(sepay_tx_id);
