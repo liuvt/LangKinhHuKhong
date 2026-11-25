@@ -624,10 +624,153 @@
     }
     else if(tab=="users")
     {
-        <div class="panel rounded-2xl"><h2>Danh sách thành viên (@userRows.Length)</h2><div class="table-scroll overflow-x-auto"><table><thead><tr><th>Username</th><th>Họ tên</th><th>Quyền</th><th>Trạng thái</th><th>Premium đến</th><th></th></tr></thead><tbody>@foreach(var u in userRows){<tr><td class="mono">@Ui.Str(u,"username")</td><td>@Ui.Str(u,"full_name")</td><td>@Ui.Str(u,"role")</td><td><span class="pill">@Ui.UserStatus(Ui.Str(u,"status"))</span></td><td>@Ui.Date(Ui.Str(u,"premiumUntil"))</td><td><button class="text-link" @onclick="() => EditUser(u)">Quản lý</button></td></tr>}</tbody></table></div></div>
+        var sortedUsers = FilteredAndSortedUsers;
+        <div class="panel rounded-2xl">
+            <div class="episode-list-toolbar" style="padding-top:0">
+                <div>
+                    <h2 style="margin:0">Danh sách thành viên (@sortedUsers.Length / @userRows.Length)</h2>
+                    <small>Tìm kiếm theo username, họ tên, SĐT, địa chỉ và bấm tiêu đề từng cột để sắp xếp thứ tự Tăng dần ▲ / Giảm dần ▼</small>
+                </div>
+                @if (!string.IsNullOrWhiteSpace(userSearch) || userRoleFilter != "" || userStatusFilter != "")
+                {
+                    <button type="button" class="btn btn-sm btn-outline" @onclick="ResetUserFilters">× Xóa bộ lọc</button>
+                }
+            </div>
+
+            <div class="upload-grid text-filter-grid" style="margin-bottom:0.85rem">
+                <label>Tìm kiếm thành viên
+                    <input @bind="userSearch" @bind:event="oninput" placeholder="Nhập username, họ tên, số điện thoại, địa chỉ..." />
+                </label>
+                <label>Lọc theo Quyền / Gói
+                    <select @bind="userRoleFilter">
+                        <option value="">Tất cả quyền &amp; gói (@userRows.Length)</option>
+                        <option value="Premium">♛ Đang có gói Premium</option>
+                        <option value="Free">○ Tài khoản Free</option>
+                        <option value="Admin">★ Quản trị viên (Admin)</option>
+                        <option value="User">● Thành viên (User)</option>
+                    </select>
+                </label>
+                <label>Lọc theo Trạng thái
+                    <select @bind="userStatusFilter">
+                        <option value="">Tất cả trạng thái</option>
+                        <option value="Active">Hoạt động</option>
+                        <option value="Locked">Đã khóa</option>
+                        <option value="Deleted">Đã xóa</option>
+                    </select>
+                </label>
+                <label>Sắp xếp theo thứ tự
+                    <select value="@UserSortPreset" @onchange="OnUserSortPresetChanged">
+                        <option value="created_at:desc">Ngày tạo: Mới nhất → Cũ nhất</option>
+                        <option value="created_at:asc">Ngày tạo: Cũ nhất → Mới nhất</option>
+                        <option value="username:asc">Username: A → Z</option>
+                        <option value="username:desc">Username: Z → A</option>
+                        <option value="full_name:asc">Họ tên: A → Z</option>
+                        <option value="full_name:desc">Họ tên: Z → A</option>
+                        <option value="premiumUntil:desc">Hạn Premium: Còn hạn dài nhất</option>
+                        <option value="premiumUntil:asc">Hạn Premium: Sắp hết hạn / Free</option>
+                        <option value="role:asc">Quyền hạn: Admin → User</option>
+                        <option value="status:asc">Trạng thái: Hoạt động → Đã khóa</option>
+                    </select>
+                </label>
+            </div>
+
+            @if (sortedUsers.Length == 0)
+            {
+                <p class="hint">Không tìm thấy thành viên nào khớp với từ khóa hoặc bộ lọc hiện tại.</p>
+            }
+            else
+            {
+                <div class="table-scroll overflow-x-auto">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th style="width:56px">
+                                    <button type="button" class="th-sort-btn @(userSortField=="created_at"?"is-sorted":"")" @onclick='() => ToggleUserSort("created_at")'>
+                                        STT @UserSortIndicator("created_at")
+                                    </button>
+                                </th>
+                                <th>
+                                    <button type="button" class="th-sort-btn @(userSortField=="username"?"is-sorted":"")" @onclick='() => ToggleUserSort("username")'>
+                                        Username @UserSortIndicator("username")
+                                    </button>
+                                </th>
+                                <th>
+                                    <button type="button" class="th-sort-btn @(userSortField=="full_name"?"is-sorted":"")" @onclick='() => ToggleUserSort("full_name")'>
+                                        Họ tên @UserSortIndicator("full_name")
+                                    </button>
+                                </th>
+                                <th>
+                                    <button type="button" class="th-sort-btn @(userSortField=="role"?"is-sorted":"")" @onclick='() => ToggleUserSort("role")'>
+                                        Quyền @UserSortIndicator("role")
+                                    </button>
+                                </th>
+                                <th>
+                                    <button type="button" class="th-sort-btn @(userSortField=="status"?"is-sorted":"")" @onclick='() => ToggleUserSort("status")'>
+                                        Trạng thái @UserSortIndicator("status")
+                                    </button>
+                                </th>
+                                <th>
+                                    <button type="button" class="th-sort-btn @(userSortField=="premiumUntil"?"is-sorted":"")" @onclick='() => ToggleUserSort("premiumUntil")'>
+                                        Premium đến @UserSortIndicator("premiumUntil")
+                                    </button>
+                                </th>
+                                <th>
+                                    <button type="button" class="th-sort-btn @(userSortField=="created_at"?"is-sorted":"")" @onclick='() => ToggleUserSort("created_at")'>
+                                        Ngày tạo @UserSortIndicator("created_at")
+                                    </button>
+                                </th>
+                                <th></th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            @for (var i = 0; i < sortedUsers.Length; i++)
+                            {
+                                var u = sortedUsers[i];
+                                var uid = Ui.Str(u, "id");
+                                var uRole = Ui.Str(u, "role");
+                                var uStatus = Ui.Str(u, "status");
+                                var uPrem = Ui.Str(u, "premiumUntil");
+                                var hasPrem = Helpers.IsPremium(uPrem);
+                                var uPhone = Ui.Str(u, "phone");
+                                <tr @key="uid" class="@(uid == editUserId ? "episode-just-uploaded" : "")">
+                                    <td class="mono"><b>@(i + 1)</b></td>
+                                    <td class="mono"><b>@Ui.Str(u,"username")</b></td>
+                                    <td>
+                                        @(Ui.Str(u,"full_name") != "" ? Ui.Str(u,"full_name") : "—")
+                                        @if (!string.IsNullOrWhiteSpace(uPhone))
+                                        {
+                                            <small class="order-subtitle">📞 @uPhone</small>
+                                        }
+                                    </td>
+                                    <td><span class="storage-pill @(uRole == "Admin" ? "premium-admin-badge" : "storage-local")">@(uRole == "Admin" ? "Quản trị viên" : "Thành viên")</span></td>
+                                    <td><span class="storage-pill @(uStatus == "Active" ? "storage-r2" : "storage-local")">@Ui.UserStatus(uStatus)</span></td>
+                                    <td>
+                                        @if (hasPrem)
+                                        {
+                                            <span class="storage-pill storage-r2">♛ @Ui.Date(uPrem)</span>
+                                        }
+                                        else
+                                        {
+                                            <span>@Ui.Date(uPrem)</span>
+                                        }
+                                    </td>
+                                    <td>@Ui.Date(Ui.Str(u,"created_at"))</td>
+                                    <td><button type="button" class="btn btn-sm btn-outline" @onclick="() => EditUser(u)">Quản lý</button></td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+            }
+        </div>
         @if(editUserId!="")
         {
-            <div class="panel top-margin form"><h2>Chỉnh sửa: @editUsername</h2><div class="two-column"><label>Họ và tên<input @bind="editFullName" maxlength="100"/></label><label>Số điện thoại<input @bind="editPhone" maxlength="25"/></label></div><label>Địa chỉ<textarea @bind="editAddress" maxlength="300"></textarea></label><label>Trạng thái<select @bind="editStatus"><option value="Active">Hoạt động</option><option value="Locked">Khóa tài khoản</option><option value="Deleted">Đã xóa (Soft delete)</option></select></label><button class="btn btn-primary" @onclick="SaveUser" disabled="@busy">Lưu thay đổi</button>
+            <div class="panel top-margin form">
+                <div class="episode-list-toolbar" style="padding-top:0">
+                    <h2 style="margin:0">Chỉnh sửa thành viên: @editUsername</h2>
+                    <button type="button" class="btn btn-sm btn-outline" @onclick='() => editUserId = ""'>× Đóng</button>
+                </div>
+                <div class="two-column"><label>Họ và tên<input @bind="editFullName" maxlength="100"/></label><label>Số điện thoại<input @bind="editPhone" maxlength="25"/></label></div><label>Địa chỉ<textarea @bind="editAddress" maxlength="300"></textarea></label><label>Trạng thái<select @bind="editStatus"><option value="Active">Hoạt động</option><option value="Locked">Khóa tài khoản</option><option value="Deleted">Đã xóa (Soft delete)</option></select></label><button class="btn btn-primary" @onclick="SaveUser" disabled="@busy">Lưu thay đổi</button>
                 <div class="divider"></div><h3>Admin cấp / gia hạn Premium</h3><p class="hint">Tự ghi thành một dòng trong lịch sử đơn hàng của User, có lý do và ngày hết hạn sau khi cộng thêm. Không tạo bill hoặc thanh toán giả.</p><div class="two-column"><label>Số tháng<input type="number" min="1" max="36" @bind="grantMonths"/></label><label>Lý do cấp / gia hạn<input @bind="grantReason" maxlength="300" placeholder="Ví dụ: Tặng Premium tri ân, hỗ trợ gia hạn..."/></label></div><button class="btn btn-gold" @onclick="GrantPremium" disabled="@busy">♛ Cấp / gia hạn Premium + lưu lịch sử</button>
             </div>
         }
@@ -890,6 +1033,79 @@
     private string uploadStatus="",lastUploadedEpisodeId="",uploadingTarget="vps";
     private string textFileTitle="",previewTextId="",previewTextFileName="",previewTextContent="";
     private string notepadFilterStoryId="",notepadFilterStorageTarget="",notepadSearch="",notepadUploadStoryId="",notepadUploadTitle="";
+    private string userSearch="",userRoleFilter="",userStatusFilter="",userSortField="created_at";
+    private bool userSortAsc=false;
+    private string UserSortPreset => $"{userSortField}:{(userSortAsc ? "asc" : "desc")}";
+    private void ToggleUserSort(string field)
+    {
+        if (userSortField == field) userSortAsc = !userSortAsc;
+        else { userSortField = field; userSortAsc = field is "username" or "full_name" or "role" or "status"; }
+    }
+    private void OnUserSortPresetChanged(ChangeEventArgs e)
+    {
+        var raw = Convert.ToString(e.Value) ?? "created_at:desc";
+        var parts = raw.Split(':', 2);
+        userSortField = parts[0];
+        userSortAsc = parts.Length > 1 && parts[1] == "asc";
+    }
+    private void ResetUserFilters()
+    {
+        userSearch = "";
+        userRoleFilter = "";
+        userStatusFilter = "";
+        userSortField = "created_at";
+        userSortAsc = false;
+    }
+    private string UserSortIndicator(string field) => userSortField == field ? (userSortAsc ? "▲" : "▼") : "⇅";
+    private JsonElement[] FilteredAndSortedUsers
+    {
+        get
+        {
+            var q = (userSearch ?? "").Trim();
+            var filtered = userRows.Where(u =>
+            {
+                if (!string.IsNullOrWhiteSpace(userStatusFilter) && !string.Equals(Ui.Str(u, "status"), userStatusFilter, StringComparison.OrdinalIgnoreCase))
+                    return false;
+                if (!string.IsNullOrWhiteSpace(userRoleFilter))
+                {
+                    if (userRoleFilter == "Premium" && !Helpers.IsPremium(Ui.Str(u, "premiumUntil"))) return false;
+                    if (userRoleFilter == "Free" && Helpers.IsPremium(Ui.Str(u, "premiumUntil"))) return false;
+                    if (userRoleFilter is "Admin" or "User" && !string.Equals(Ui.Str(u, "role"), userRoleFilter, StringComparison.OrdinalIgnoreCase)) return false;
+                }
+                if (!string.IsNullOrWhiteSpace(q))
+                {
+                    var match = Ui.Str(u, "username").Contains(q, StringComparison.OrdinalIgnoreCase)
+                                || Ui.Str(u, "full_name").Contains(q, StringComparison.OrdinalIgnoreCase)
+                                || Ui.Str(u, "phone").Contains(q, StringComparison.OrdinalIgnoreCase)
+                                || Ui.Str(u, "address").Contains(q, StringComparison.OrdinalIgnoreCase);
+                    if (!match) return false;
+                }
+                return true;
+            });
+
+            return (userSortField switch
+            {
+                "username" => userSortAsc
+                    ? filtered.OrderBy(u => Ui.Str(u, "username"), StringComparer.OrdinalIgnoreCase)
+                    : filtered.OrderByDescending(u => Ui.Str(u, "username"), StringComparer.OrdinalIgnoreCase),
+                "full_name" => userSortAsc
+                    ? filtered.OrderBy(u => string.IsNullOrWhiteSpace(Ui.Str(u, "full_name")) ? "\uFFFF" : Ui.Str(u, "full_name"), StringComparer.CurrentCultureIgnoreCase)
+                    : filtered.OrderByDescending(u => Ui.Str(u, "full_name"), StringComparer.CurrentCultureIgnoreCase),
+                "role" => userSortAsc
+                    ? filtered.OrderBy(u => Ui.Str(u, "role"), StringComparer.OrdinalIgnoreCase).ThenBy(u => Ui.Str(u, "username"), StringComparer.OrdinalIgnoreCase)
+                    : filtered.OrderByDescending(u => Ui.Str(u, "role"), StringComparer.OrdinalIgnoreCase).ThenBy(u => Ui.Str(u, "username"), StringComparer.OrdinalIgnoreCase),
+                "status" => userSortAsc
+                    ? filtered.OrderBy(u => Ui.Str(u, "status"), StringComparer.OrdinalIgnoreCase).ThenBy(u => Ui.Str(u, "username"), StringComparer.OrdinalIgnoreCase)
+                    : filtered.OrderByDescending(u => Ui.Str(u, "status"), StringComparer.OrdinalIgnoreCase).ThenBy(u => Ui.Str(u, "username"), StringComparer.OrdinalIgnoreCase),
+                "premiumUntil" => userSortAsc
+                    ? filtered.OrderBy(u => Ui.Str(u, "premiumUntil"), StringComparer.Ordinal)
+                    : filtered.OrderByDescending(u => Ui.Str(u, "premiumUntil"), StringComparer.Ordinal),
+                _ => userSortAsc
+                    ? filtered.OrderBy(u => Ui.Str(u, "created_at"), StringComparer.Ordinal)
+                    : filtered.OrderByDescending(u => Ui.Str(u, "created_at"), StringComparer.Ordinal)
+            }).ToArray();
+        }
+    }
     private string notepadFileId="",notepadDriveFileId="",notepadStoryId="",notepadStorageTarget="vps",notepadTitle="",notepadFileName="",notepadExtension=".txt",notepadUpdatedAt="",deleteNotepadFileId="",deleteNotepadFileName="",deleteNotepadStorageTarget="vps";
     private string gdriveClientIdInput="",gdriveClientSecretInput="",gdriveRootFolderInput="LangKinhHuKhong-BanThao",sepaySecretInput="";
     private string driveCurrentFolderId="",driveCurrentFolderName="",driveNewFolderName="";

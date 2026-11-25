@@ -332,3 +332,7 @@
 .story-dialog-header{position:sticky;top:-24px;z-index:3;margin:-24px -24px 6px;padding:18px 24px 14px;background:rgba(255,255,255,.96);backdrop-filter:blur(8px);border-bottom:1px solid #eef1f8}
 .story-dialog-header h2{margin:0 0 3px;font-size:19px;color:#1e293b}
 @media(max-width:640px){.story-dialog-overlay{padding:10px}.story-dialog{width:100%;max-height:95vh;padding:16px}.story-dialog-header{top:-16px;margin:-16px -16px 4px;padding:14px 16px 12px}}
+
+/* V1.9.7.5 – Sortable table column headers in Admin Panel */
+.th-sort-btn{display:inline-flex;align-items:center;gap:5px;border:0;background:transparent;padding:0;color:#8994a8;font-size:10px;font-weight:850;text-transform:uppercase;letter-spacing:.055em;cursor:pointer;white-space:nowrap;transition:color .15s}
+.th-sort-btn:hover,.th-sort-btn.is-sorted{color:#5c4fd1}
