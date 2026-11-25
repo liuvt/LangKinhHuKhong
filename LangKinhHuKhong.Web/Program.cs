@@ -665,7 +665,18 @@ app.MapPost("/api/orders", async Task<IResult> (HttpContext ctx, Database source
     var userId = Helpers.UserId(ctx.User);
     var openOrders = Convert.ToInt32(await db.ValueAsync("SELECT COUNT(*) FROM orders WHERE user_id=@u AND order_type='Purchase' AND status IN ('Pending','Reviewing')", ("@u", userId)));
     if (openOrders >= 3)
-        return Bad("Bạn đang có tối đa 3 đơn chờ xử lý. Hãy hoàn tất thanh toán hoặc đợi đơn cũ hết hạn.");
+    {
+        var cancelledOld = await db.ExecAsync(@"UPDATE orders SET status='Cancelled', review_note='Tự động hủy đơn chờ cũ khi tạo đơn mới'
+            WHERE id IN (SELECT id FROM orders WHERE user_id=@u AND order_type='Purchase' AND status='Pending' ORDER BY created_at ASC LIMIT 1)", ("@u", userId));
+        if (cancelledOld == 0)
+        {
+            var latestOpenId = Convert.ToString(await db.ValueAsync(
+                "SELECT id FROM orders WHERE user_id=@u AND order_type='Purchase' AND status IN ('Pending','Reviewing') ORDER BY created_at DESC LIMIT 1", ("@u", userId))) ?? "";
+            if (!string.IsNullOrWhiteSpace(latestOpenId))
+                return Results.Ok(await OrderDto(db, latestOpenId));
+            return Bad("Bạn đang có tối đa 3 đơn chờ xử lý. Hãy hoàn tất thanh toán hoặc đợi đơn cũ hết hạn.");
+        }
+    }
     var plan = await db.FirstAsync("SELECT * FROM subscription_plans WHERE id='premium'");
     var bank = await db.FirstAsync("SELECT * FROM bank_receivers WHERE is_active=1 AND is_default=1");
     if (plan is null || bank is null || string.IsNullOrWhiteSpace(bank.S("bank_bin")) || string.IsNullOrWhiteSpace(bank.S("account_number")) || string.IsNullOrWhiteSpace(bank.S("account_name")))

@@ -425,45 +425,124 @@
                     @if(Ui.Property(orderDetail,"id").ValueKind == JsonValueKind.String)
                     {
                         var adminGranted = Ui.Str(orderDetail,"orderType") == "AdminGrant";
-                        <div class="panel qr-panel">
-                            <h2>@(adminGranted ? "Chi tiết Admin cấp Premium" : "Đơn hàng " + Ui.Str(orderDetail,"code"))</h2>
-                            <div class="meta-line"><span>Mã hồ sơ</span><b class="mono">@Ui.Str(orderDetail,"code")</b></div>
-                            <div class="meta-line"><span>Nguồn</span><b>@(adminGranted ? "Admin cấp / gia hạn" : "Người dùng tự mua VietQR")</b></div>
-                            <div class="meta-line"><span>Thời gian cộng thêm</span><b>@Ui.Num(orderDetail,"durationMonths") tháng</b></div>
-                            @if(Ui.Str(orderDetail,"premiumStartAt") != "")
-                            { <div class="meta-line"><span>Bắt đầu cộng hạn</span><b>@Ui.Date(Ui.Str(orderDetail,"premiumStartAt"))</b></div> }
-                            @if(Ui.Str(orderDetail,"premiumEndAt") != "")
-                            { <div class="meta-line"><span>Hết hạn sau cập nhật</span><b>@Ui.Date(Ui.Str(orderDetail,"premiumEndAt"))</b></div> }
-                            @if(adminGranted)
-                            {
-                                <div class="premium-reason"><b>Lý do Admin cấp / gia hạn</b><p>@Ui.Str(orderDetail,"grantReason")</p></div>
-                                <div class="meta-line"><span>Người thực hiện</span><b>@Ui.Str(orderDetail,"grantedByName")</b></div>
-                                <p class="hint">Đây là quyền Premium được Admin cấp, không phải đơn đã chuyển khoản hoặc doanh thu.</p>
-                            }
-                            else
-                            {
-                                <div class="price">@Ui.Money(Ui.Num(orderDetail,"amountVnd"))</div>
-                                @if(Ui.Str(orderDetail,"qrUrl") != "" && (Ui.Str(orderDetail,"status")=="Pending" || Ui.Str(orderDetail,"status")=="Reviewing"))
-                                { <img class="qr-image" src="@Ui.Str(orderDetail,"qrUrl")" alt="VietQR chuyển khoản" /> }
-                                <p>Chuyển khoản đúng số tiền và nội dung bên dưới. Hệ thống SePay sẽ tự động kích hoạt Premium ngay sau khi nhận giao dịch.</p>
-                                <div class="meta-line"><span>Ngân hàng</span><b>@Ui.Str(orderDetail,"bankName")</b></div>
-                                <div class="meta-line"><span>Số tài khoản</span><b>@Ui.Str(orderDetail,"accountNumber")</b></div>
-                                <div class="meta-line"><span>Chủ tài khoản</span><b>@Ui.Str(orderDetail,"accountName")</b></div>
-                                <div class="meta-line"><span>Nội dung CK</span><b class="mono">@Ui.Str(orderDetail,"code")</b></div>
-                                <div class="meta-line"><span>Trạng thái</span><b>@Ui.Str(orderDetail,"status")</b></div>
-                                <div class="meta-line"><span>Hạn thanh toán</span><b>@Ui.Date(Ui.Str(orderDetail,"expiresAt"))</b></div>
-                                @if(Ui.Str(orderDetail,"status")=="Pending" || Ui.Str(orderDetail,"status")=="Reviewing")
+                        var ordStatus = Ui.Str(orderDetail,"status");
+                        var showQr = !adminGranted && Ui.Str(orderDetail,"qrUrl") != "" && (ordStatus == "Pending" || ordStatus == "Reviewing");
+                        var statusBadgeText = ordStatus switch
+                        {
+                            "Paid" => "✅ Đã thanh toán · Đã kích hoạt Premium",
+                            "Pending" => "⏳ Chờ chuyển khoản (Tự động duyệt qua SePay)",
+                            "Reviewing" => "🔍 Đang chờ xác nhận chuyển khoản",
+                            "Rejected" => "❌ Đã từ chối",
+                            "Expired" => "⌛ Đã hết hạn",
+                            "Cancelled" => "⚪ Đã hủy",
+                            _ => ordStatus
+                        };
+                        <div class="overlay backdrop-blur-sm premium-order-overlay" @onclick="CloseOrderDialog">
+                            <div class="premium-order-dialog panel rounded-2xl @(showQr ? "premium-order-dialog-wide" : "")" role="dialog" aria-modal="true" @onclick:stopPropagation="true">
+                                <div class="episode-list-toolbar premium-order-header">
+                                    <div>
+                                        <span class="eyebrow">@(adminGranted ? "ADMIN GRANT" : "THANH TOÁN VIETQR · SEPAY AUTO")</span>
+                                        <h2>@(adminGranted ? "Chi tiết Admin cấp Premium" : "Thông tin chuyển khoản & Trạng thái đơn")</h2>
+                                    </div>
+                                    <button type="button" class="btn btn-sm btn-outline" @onclick="CloseOrderDialog">× Đóng</button>
+                                </div>
+
+                                <div class="premium-order-status-banner @(ordStatus == "Paid" ? "is-paid" : ordStatus is "Pending" or "Reviewing" ? "is-pending" : "is-closed")">
+                                    <div>
+                                        <b>@statusBadgeText</b>
+                                        <small>
+                                            @if (adminGranted)
+                                            {
+                                                <span>Gói Premium được Quản trị viên cấp trực tiếp vào tài khoản của bạn.</span>
+                                            }
+                                            else if (ordStatus == "Paid")
+                                            {
+                                                <span>Giao dịch đã hoàn tất. Thời hạn Premium đã được cộng vào tài khoản của bạn.</span>
+                                            }
+                                            else if (ordStatus is "Pending" or "Reviewing")
+                                            {
+                                                <span>Quét mã VietQR hoặc chuyển khoản đúng số tiền &amp; nội dung CK bên dưới. Hệ thống SePay tự động kích hoạt ngay khi nhận tiền.</span>
+                                            }
+                                            else
+                                            {
+                                                <span>Đơn hàng này đã đóng. Bạn có thể bấm "Đăng ký Premium" để tạo mã VietQR mới.</span>
+                                            }
+                                        </small>
+                                    </div>
+                                </div>
+
+                                @if (adminGranted)
                                 {
-                                    <div class="table-actions">
-                                        <button class="btn btn-primary" disabled="@busy" @onclick='() => LoadOrder(Ui.Str(orderDetail,"id"), true)'>↻ Kiểm tra thanh toán (SePay)</button>
-                                        @if(Ui.Str(orderDetail,"status")=="Pending")
-                                        {
-                                            <button class="btn btn-outline" disabled="@busy" @onclick="ReportPayment">Tôi đã chuyển khoản</button>
-                                        }
+                                    <div class="premium-order-details">
+                                        <div class="meta-line"><span>Mã hồ sơ</span><b class="mono">@Ui.Str(orderDetail,"code")</b></div>
+                                        <div class="meta-line"><span>Nguồn</span><b>Admin cấp / gia hạn</b></div>
+                                        <div class="meta-line"><span>Thời gian cộng thêm</span><b>@Ui.Num(orderDetail,"durationMonths") tháng</b></div>
+                                        @if(Ui.Str(orderDetail,"premiumStartAt") != "")
+                                        { <div class="meta-line"><span>Bắt đầu cộng hạn</span><b>@Ui.Date(Ui.Str(orderDetail,"premiumStartAt"))</b></div> }
+                                        @if(Ui.Str(orderDetail,"premiumEndAt") != "")
+                                        { <div class="meta-line"><span>Hết hạn sau cập nhật</span><b>@Ui.Date(Ui.Str(orderDetail,"premiumEndAt"))</b></div> }
+                                        <div class="premium-reason"><b>Lý do Admin cấp / gia hạn</b><p>@Ui.Str(orderDetail,"grantReason")</p></div>
+                                        <div class="meta-line"><span>Người thực hiện</span><b>@Ui.Str(orderDetail,"grantedByName")</b></div>
+                                        <p class="hint">Đây là quyền Premium được Admin cấp, không phải đơn đã chuyển khoản hoặc doanh thu.</p>
                                     </div>
                                 }
-                            }
-                            <button class="btn btn-outline" @onclick='() => orderDetail = default'>Đóng</button>
+                                else
+                                {
+                                    <div class="@(showQr ? "premium-order-body-grid" : "premium-order-details")">
+                                        @if (showQr)
+                                        {
+                                            <div class="premium-qr-column">
+                                                <img class="qr-image" src="@Ui.Str(orderDetail,"qrUrl")" alt="VietQR chuyển khoản" />
+                                                <div class="premium-auto-poll-hint">
+                                                    <span class="episode-upload-spinner" aria-hidden="true"></span>
+                                                    <span>Đang tự động kiểm tra giao dịch SePay...</span>
+                                                </div>
+                                            </div>
+                                        }
+                                        <div class="premium-transfer-column">
+                                            <div class="premium-amount-box">
+                                                <small>SỐ TIỀN CHUYỂN KHOẢN</small>
+                                                <div class="price">@Ui.Money(Ui.Num(orderDetail,"amountVnd"))</div>
+                                                <span>Gói Premium +@Ui.Num(orderDetail,"durationMonths") tháng</span>
+                                            </div>
+                                            <div class="meta-line"><span>Ngân hàng thụ hưởng</span><b>@Ui.Str(orderDetail,"bankName")</b></div>
+                                            <div class="meta-line"><span>Số tài khoản</span><b class="mono">@Ui.Str(orderDetail,"accountNumber")</b></div>
+                                            <div class="meta-line"><span>Chủ tài khoản</span><b>@Ui.Str(orderDetail,"accountName")</b></div>
+                                            <div class="meta-line"><span>Nội dung CK (bắt buộc)</span><b class="mono premium-code-highlight">@Ui.Str(orderDetail,"code")</b></div>
+                                            <div class="meta-line"><span>Mã đơn hàng</span><b class="mono">@Ui.Str(orderDetail,"code")</b></div>
+                                            <div class="meta-line"><span>Trạng thái chi tiết</span><b>@statusBadgeText</b></div>
+                                            @if (Ui.Str(orderDetail,"paidAt") != "")
+                                            {
+                                                <div class="meta-line"><span>Thời điểm thanh toán</span><b>@Ui.Date(Ui.Str(orderDetail,"paidAt"))</b></div>
+                                            }
+                                            @if (Ui.Str(orderDetail,"premiumStartAt") != "")
+                                            {
+                                                <div class="meta-line"><span>Bắt đầu cộng hạn</span><b>@Ui.Date(Ui.Str(orderDetail,"premiumStartAt"))</b></div>
+                                            }
+                                            @if (Ui.Str(orderDetail,"premiumEndAt") != "")
+                                            {
+                                                <div class="meta-line"><span>Hết hạn Premium</span><b>@Ui.Date(Ui.Str(orderDetail,"premiumEndAt"))</b></div>
+                                            }
+                                            @if (ordStatus is "Pending" or "Reviewing")
+                                            {
+                                                <div class="meta-line"><span>Hạn thanh toán</span><b>@Ui.Date(Ui.Str(orderDetail,"expiresAt"))</b></div>
+                                            }
+                                        </div>
+                                    </div>
+                                }
+
+                                <div class="premium-order-footer">
+                                    @if(!adminGranted && (ordStatus == "Pending" || ordStatus == "Reviewing"))
+                                    {
+                                        <button type="button" class="btn btn-primary" disabled="@busy" @onclick='() => LoadOrder(Ui.Str(orderDetail,"id"), true)'>↻ Kiểm tra thanh toán (SePay)</button>
+                                        @if(ordStatus == "Pending")
+                                        {
+                                            <button type="button" class="btn btn-outline" disabled="@busy" @onclick="ReportPayment">✓ Tôi đã chuyển khoản</button>
+                                        }
+                                    }
+                                    <button type="button" class="btn btn-outline" @onclick="CloseOrderDialog">Đóng cửa sổ</button>
+                                </div>
+                            </div>
                         </div>
                     }
                 </section>
@@ -1166,6 +1245,11 @@
         finally { busy=false; }
     }
     private string pollingOrderId = "";
+    private void CloseOrderDialog()
+    {
+        pollingOrderId = "";
+        orderDetail = default;
+    }
     private async Task BuyPremium()
     {
         if(!isAuthenticated){authMode="login";return;}

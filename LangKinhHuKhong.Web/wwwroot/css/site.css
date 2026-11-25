@@ -297,3 +297,29 @@
 .admin-story-actions{display:flex;flex-direction:column;align-items:stretch;gap:6px;flex-shrink:0;align-self:center}
 .admin-story-actions .btn{width:100%;justify-content:center}
 @media(max-width:600px){.admin-story-item{flex-wrap:wrap}.admin-story-actions{flex-direction:row;width:100%;margin-top:6px}.admin-story-actions .btn{flex:1}}
+
+/* V1.9.7.3 – Premium VietQR & Order Status Modal Dialog */
+.premium-order-overlay{z-index:65;padding:18px;background:rgba(15,23,42,.56)}
+.premium-order-dialog{width:min(580px,95vw);max-height:92vh;overflow-y:auto;padding:24px;position:relative;display:flex;flex-direction:column;gap:14px;background:#ffffff;border:1px solid #dbe4f3;border-radius:22px;box-shadow:0 28px 90px rgba(15,23,42,.38)}
+.premium-order-dialog-wide{width:min(820px,96vw)}
+.premium-order-header{padding:0 0 12px;border-bottom:1px solid #eef1f8;align-items:flex-start}
+.premium-order-header h2{margin:4px 0 0;font-size:20px;color:#1e293b}
+.premium-order-status-banner{padding:12px 15px;border-radius:13px;border:1px solid #e2e8f0;background:#f8fafc}
+.premium-order-status-banner b{display:block;font-size:13px;color:#1e293b}
+.premium-order-status-banner small{display:block;margin-top:4px;font-size:11.5px;line-height:1.55;color:#475569}
+.premium-order-status-banner.is-pending{background:#f5f3ff;border-color:#ddd6fe}
+.premium-order-status-banner.is-pending b{color:#4c3ec7}
+.premium-order-status-banner.is-paid{background:#ecfdf5;border-color:#a7f3d0}
+.premium-order-status-banner.is-paid b{color:#047857}
+.premium-order-body-grid{display:grid;grid-template-columns:270px minmax(0,1fr);gap:22px;align-items:start}
+.premium-qr-column{display:flex;flex-direction:column;align-items:center;padding:14px;background:#fafbff;border:1px solid #e5e9f6;border-radius:16px;text-align:center}
+.premium-qr-column .qr-image{width:240px;margin:0 auto 10px;padding:8px;border-radius:12px;border:1px solid #e9ecf5;background:#fff}
+.premium-auto-poll-hint{display:inline-flex;align-items:center;gap:8px;font-size:11px;font-weight:700;color:#5548c9;background:#eeebff;padding:7px 11px;border-radius:999px}
+.premium-transfer-column{display:flex;flex-direction:column;min-width:0}
+.premium-amount-box{padding:12px 15px;margin-bottom:8px;border-radius:13px;background:linear-gradient(125deg,#f4f2ff,#fafaff);border:1px solid #e5e0ff;display:flex;align-items:baseline;justify-content:space-between;flex-wrap:wrap;gap:8px}
+.premium-amount-box small{font-size:10px;font-weight:850;letter-spacing:.08em;color:#6658d8;width:100%}
+.premium-amount-box .price{margin:0;font-size:26px;color:#232e4d}
+.premium-amount-box span{font-size:11.5px;font-weight:750;color:#5c4fd1;background:#e9e4ff;padding:4px 9px;border-radius:999px}
+.premium-code-highlight{color:#4f41c7!important;background:#eeebff;padding:4px 9px;border-radius:7px;font-size:12.5px!important;letter-spacing:.03em}
+.premium-order-footer{display:flex;align-items:center;justify-content:flex-end;flex-wrap:wrap;gap:8px;padding-top:12px;border-top:1px solid #eef1f8}
+@media(max-width:720px){.premium-order-body-grid{grid-template-columns:1fr}.premium-qr-column .qr-image{width:210px}.premium-order-dialog{padding:17px}.premium-order-footer{justify-content:stretch}.premium-order-footer .btn{flex:1}}
