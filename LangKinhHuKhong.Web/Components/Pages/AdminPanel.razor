@@ -31,85 +31,60 @@
     @if (loading) {<div class="panel rounded-2xl">Đang tải bảng quản trị...</div>}
     else if(tab=="stories")
     {
-        <div class="story-workflow rounded-2xl">
-            <div class="workflow-step"><span class="workflow-number">1</span><div><b>Thông tin truyện</b><small>Tạo tên, thể loại, giới thiệu</small></div></div>
-            <div class="workflow-step"><span class="workflow-number">2</span><div><b>Ảnh đại diện</b><small>Upload hoặc thay ảnh trên R2</small></div></div>
-            <div class="workflow-step"><span class="workflow-number">3</span><div><b>Danh sách tập MP3</b><small>Thêm, sửa, thay file, xóa</small></div></div>
-            <div class="workflow-step"><span class="workflow-number">4</span><div><b>Kho file chữ (.md, .txt)</b><small>Lưu trên VPS (0 hoặc nhiều file)</small></div></div>
-        </div>
-        <div class="two-column admin-columns grid gap-5">
-            <div class="panel form rounded-2xl"><h2>@(editingStoryId == "" ? "Thêm bộ truyện" : "Chỉnh sửa bộ truyện")</h2>
-                <label>Tên truyện<input @bind="story.Title" @bind:event="oninput" maxlength="180"/></label>
-                <label>Slug (tự động, không dấu)<input readonly value="@(editingStoryId == "" ? Slugs.FromTitle(story.Title) : story.Slug)" /></label>
-                <p class="hint">Slug được tạo từ tên truyện và tự thêm -2, -3 nếu trùng; sau khi tạo sẽ giữ nguyên để bảo vệ URL cũ.</p>
-                <label>Tác giả<input @bind="story.Author" maxlength="120"/></label>
-                <div class="genre-picker"><b>Thể loại (chọn nhiều)</b><div class="genre-option-grid">
-                    @foreach(var g in genreRows.Where(x=>Ui.Num(x,"is_active")==1))
-                    {
-                        var key=Ui.Str(g,"slug");
-                        <label class="genre-option"><input type="checkbox" checked="@story.Genres.Contains(key)" @onchange="e => ToggleGenre(key, e.Value is bool value && value)" /><span>@Ui.Str(g,"name")</span></label>
-                    }
-                </div><small>Muốn bổ sung thể loại? Chọn mục Thể loại ở trên.</small></div>
-                <p class="hint">Ảnh đại diện được tải lên ở bước 2, lưu trực tiếp trên Cloudflare R2; không cần URL ảnh ngoài.</p>
-                <label>Giới thiệu<textarea @bind="story.Description" rows="4" maxlength="15000"></textarea></label>
-                <label>Trạng thái<select @bind="story.Status"><option value="Draft">Bản nháp</option><option value="Published">Phát hành</option><option value="Hidden">Ẩn</option></select></label>
-                <button class="btn btn-primary" disabled="@busy" @onclick="SaveStory">@(editingStoryId==""?"Tạo truyện":"Lưu cập nhật")</button>
-                @if(editingStoryId!=""){<button class="btn btn-outline" @onclick="NewStory">+ Thêm truyện mới</button>}
+        <div class="panel rounded-2xl">
+            <div class="episode-list-toolbar" style="padding-top:0">
+                <div>
+                    <h2 style="margin:0">Danh sách bộ truyện (@storyRows.Length)</h2>
+                    <small>Bấm "+ Thêm mới" để tạo truyện hoặc chọn "MP3 &amp; File chữ" để quản lý ảnh bìa, các tập audio và kho file bản thảo (.md, .txt)</small>
+                </div>
+                <button type="button" class="btn btn-primary" disabled="@busy" @onclick="OpenNewStoryModal">+ Thêm mới</button>
             </div>
-            <div class="panel rounded-2xl">
-                <div class="episode-list-toolbar" style="padding-top:0">
-                    <div>
-                        <h2 style="margin:0">Danh sách bộ truyện (@storyRows.Length)</h2>
-                        <small>Chọn "MP3 &amp; File chữ" để quản lý ảnh bìa, các tập audio và kho file bản thảo (.md, .txt)</small>
-                    </div>
-                </div>
-                <div class="admin-story-list">
-                    @foreach(var s in storyRows)
-                    {
-                        var sid = Ui.Str(s, "id");
-                        var stStatus = Ui.Str(s, "status");
-                        var coverThumb = Ui.Str(s, "cover_image_url");
-                        var genreNames = Ui.Str(s, "genre_names");
-                        if (string.IsNullOrWhiteSpace(genreNames)) genreNames = Ui.Str(s, "genre");
-                        var isSelectedStory = sid == activeStoryId || sid == editingStoryId;
-                        <div @key="sid" class="admin-story-item rounded-xl @(isSelectedStory ? "admin-story-item-active" : "")">
-                            <span class="admin-story-thumb">
-                                @if (!string.IsNullOrWhiteSpace(coverThumb))
+            <div class="admin-story-list admin-story-grid">
+                @foreach(var s in storyRows)
+                {
+                    var sid = Ui.Str(s, "id");
+                    var stStatus = Ui.Str(s, "status");
+                    var coverThumb = Ui.Str(s, "cover_image_url");
+                    var genreNames = Ui.Str(s, "genre_names");
+                    if (string.IsNullOrWhiteSpace(genreNames)) genreNames = Ui.Str(s, "genre");
+                    var isSelectedStory = sid == activeStoryId || (storyModalOpen && sid == editingStoryId);
+                    <div @key="sid" class="admin-story-item rounded-xl @(isSelectedStory ? "admin-story-item-active" : "")">
+                        <span class="admin-story-thumb">
+                            @if (!string.IsNullOrWhiteSpace(coverThumb))
+                            {
+                                <img src="@coverThumb" alt="@Ui.Str(s, "title")" loading="lazy" />
+                            }
+                            else
+                            {
+                                <span>◈</span>
+                            }
+                        </span>
+                        <div class="admin-story-info">
+                            <div class="admin-story-title-row">
+                                <b>@Ui.Str(s, "title")</b>
+                                <span class="storage-pill @(stStatus == "Published" ? "storage-r2" : "storage-local")">
+                                    @(stStatus == "Published" ? "● Phát hành" : stStatus == "Draft" ? "○ Bản nháp" : "◌ Đang ẩn")
+                                </span>
+                            </div>
+                            <div class="admin-story-meta-row">
+                                <span class="admin-story-stat">🎧 <b>@Ui.Num(s, "episode_count")</b> tập MP3</span>
+                                <span class="admin-story-stat">📝 <b>@Ui.Num(s, "text_count")</b> file chữ</span>
+                                @if (!string.IsNullOrWhiteSpace(Ui.Str(s, "author")))
                                 {
-                                    <img src="@coverThumb" alt="@Ui.Str(s, "title")" loading="lazy" />
-                                }
-                                else
-                                {
-                                    <span>◈</span>
-                                }
-                            </span>
-                            <div class="admin-story-info">
-                                <div class="admin-story-title-row">
-                                    <b>@Ui.Str(s, "title")</b>
-                                    <span class="storage-pill @(stStatus == "Published" ? "storage-r2" : "storage-local")">
-                                        @(stStatus == "Published" ? "● Phát hành" : stStatus == "Draft" ? "○ Bản nháp" : "◌ Đang ẩn")
-                                    </span>
-                                </div>
-                                <div class="admin-story-meta-row">
-                                    <span class="admin-story-stat">🎧 <b>@Ui.Num(s, "episode_count")</b> tập MP3</span>
-                                    <span class="admin-story-stat">📝 <b>@Ui.Num(s, "text_count")</b> file chữ</span>
-                                    @if (!string.IsNullOrWhiteSpace(Ui.Str(s, "author")))
-                                    {
-                                        <span class="admin-story-stat">✍ @Ui.Str(s, "author")</span>
-                                    }
-                                </div>
-                                @if (!string.IsNullOrWhiteSpace(genreNames))
-                                {
-                                    <small class="admin-story-genres">@genreNames</small>
+                                    <span class="admin-story-stat">✍ @Ui.Str(s, "author")</span>
                                 }
                             </div>
-                            <div class="admin-story-actions">
-                                <button type="button" class="btn btn-sm btn-outline" @onclick="() => EditStory(s)">✎ Sửa</button>
-                                <button type="button" class="btn btn-sm btn-primary" @onclick="() => SelectStory(sid)">📂 MP3 &amp; File chữ</button>
-                            </div>
+                            @if (!string.IsNullOrWhiteSpace(genreNames))
+                            {
+                                <small class="admin-story-genres">@genreNames</small>
+                            }
                         </div>
-                    }
-                </div>
+                        <div class="admin-story-actions">
+                            <button type="button" class="btn btn-sm btn-outline" @onclick="() => EditStory(s)">✎ Sửa</button>
+                            <button type="button" class="btn btn-sm btn-primary" @onclick="() => SelectStory(sid)">📂 MP3 &amp; File chữ</button>
+                        </div>
+                    </div>
+                }
             </div>
         </div>
         @if(!string.IsNullOrEmpty(activeStoryId))
@@ -775,6 +750,67 @@
         <div class="panel rounded-2xl"><h2>Nhật ký quản trị gần đây</h2><div class="table-scroll overflow-x-auto"><table><thead><tr><th>Ngày</th><th>Hành động</th><th>Đối tượng</th><th>Thông tin</th></tr></thead><tbody>@foreach(var log in auditRows){<tr><td>@Ui.Date(Ui.Str(log,"created_at"))</td><td class="mono">@Ui.Str(log,"action")</td><td class="mono">@Ui.Str(log,"subject_id")</td><td>@Ui.Str(log,"details")</td></tr>}</tbody></table></div></div>
     }
 
+    @if (storyModalOpen)
+    {
+        <div class="overlay backdrop-blur-sm story-dialog-overlay" @onclick="CloseStoryModal">
+            <div class="story-dialog panel form rounded-2xl" role="dialog" aria-modal="true" @onclick:stopPropagation="true">
+                <div class="episode-list-toolbar story-dialog-header">
+                    <div>
+                        <h2>@(editingStoryId == "" ? "Thêm bộ truyện mới" : "Chỉnh sửa thông tin bộ truyện")</h2>
+                        <small>@(editingStoryId == "" ? "Nhập tên truyện, tác giả, chọn thể loại và bấm Tạo truyện" : "Slug cũ giữ nguyên để bảo vệ liên kết SEO của bộ truyện")</small>
+                    </div>
+                    <button type="button" class="btn btn-sm btn-outline" disabled="@busy" @onclick="CloseStoryModal">× Đóng</button>
+                </div>
+
+                <div class="two-column">
+                    <label>Tên truyện
+                        <input @bind="story.Title" @bind:event="oninput" maxlength="180" placeholder="Nhập tên bộ truyện..." />
+                    </label>
+                    <label>Slug (tự động, không dấu)
+                        <input readonly value="@(editingStoryId == "" ? Slugs.FromTitle(story.Title) : story.Slug)" />
+                    </label>
+                </div>
+
+                <div class="two-column">
+                    <label>Tác giả
+                        <input @bind="story.Author" maxlength="120" placeholder="Tên tác giả..." />
+                    </label>
+                    <label>Trạng thái hiển thị
+                        <select @bind="story.Status">
+                            <option value="Draft">○ Bản nháp</option>
+                            <option value="Published">● Phát hành</option>
+                            <option value="Hidden">◌ Ẩn</option>
+                        </select>
+                    </label>
+                </div>
+
+                <div class="genre-picker" style="margin:4px 0">
+                    <b>Thể loại (chọn nhiều)</b>
+                    <div class="genre-option-grid">
+                        @foreach(var g in genreRows.Where(x=>Ui.Num(x,"is_active")==1))
+                        {
+                            var key=Ui.Str(g,"slug");
+                            <label class="genre-option">
+                                <input type="checkbox" checked="@story.Genres.Contains(key)" @onchange="e => ToggleGenre(key, e.Value is bool value && value)" />
+                                <span>@Ui.Str(g,"name")</span>
+                            </label>
+                        }
+                    </div>
+                    <small>Ảnh đại diện, tập MP3 và file chữ (.md, .txt) được quản lý tại nút "📂 MP3 &amp; File chữ" sau khi lưu.</small>
+                </div>
+
+                <label>Giới thiệu nội dung
+                    <textarea @bind="story.Description" rows="5" maxlength="15000" placeholder="Mô tả nội dung, tóm tắt cốt truyện..."></textarea>
+                </label>
+
+                <div class="premium-order-footer">
+                    <button type="button" class="btn btn-primary" disabled="@busy" @onclick="SaveStory">@(busy ? "⏳ Đang lưu..." : (editingStoryId == "" ? "+ Tạo truyện" : "💾 Lưu cập nhật"))</button>
+                    <button type="button" class="btn btn-outline" disabled="@busy" @onclick="CloseStoryModal">Hủy</button>
+                </div>
+            </div>
+        </div>
+    }
+
     @if (notepadOpen)
     {
         <div class="overlay backdrop-blur-sm notepad-dialog-overlay" @onclick="CloseNotepad">
@@ -847,7 +883,7 @@
     private int activeOrderMonths=0;
     private string tab="stories",message="",activeStoryId="",editingStoryId="",episodeTitle="",editEpisodeId="",editEpisodeTitle="",editEpisodeStatus="Published",deleteEpisodeId="",deleteEpisodeTitle="",editUserId="",editUsername="",editFullName="",editPhone="",editAddress="",editStatus="Active",grantReason="",activeOrderId="",activeOrderCode="",activeOrderStatus="",bankReference="",rejectReason="";
     private int episodeNumber=1,editEpisodeNumber=1,grantMonths=1,premiumPrice=100000,activeOrderAmount=0;
-    private bool loading=true,busy=false,failed=false;
+    private bool loading=true,busy=false,failed=false,storyModalOpen=false;
     private bool uploadingAudio=false,refreshingEpisodes=false,uploadingTexts=false,notepadOpen=false,savingNotepad=false;
     private bool syncingDrive=false,showDriveExplorer=false,showGdriveConfig=false,notepadDriveOnlyMode=false;
     private string uploadStatus="",lastUploadedEpisodeId="",uploadingTarget="vps";
@@ -1039,12 +1075,15 @@
     }
     private void Notify(string text,bool error=false){message=text;failed=error;}
     private void NewStory(){editingStoryId="";story=new();}
+    private void OpenNewStoryModal(){NewStory();storyModalOpen=true;}
+    private void CloseStoryModal(){if(!busy)storyModalOpen=false;}
     private void EditStory(JsonElement s)
     {
         editingStoryId=Ui.Str(s,"id");
         story=new(){Slug=Ui.Str(s,"slug"),Title=Ui.Str(s,"title"),Author=Ui.Str(s,"author"),Genre=Ui.Str(s,"genre"),
             Genres=Ui.Str(s,"genre_keys").Split('|',StringSplitOptions.RemoveEmptyEntries),
             Description=Ui.Str(s,"description"),CoverUrl=Ui.Str(s,"cover_url"),Status=Ui.Str(s,"status")};
+        storyModalOpen=true;
     }
     private async Task SaveStory()
     {
@@ -1052,11 +1091,14 @@
         busy=true;
         try
         {
-            if(editingStoryId==""){var result=await Api.Post("/admin/stories",story);activeStoryId=Ui.Str(result,"id");}
+            var isNew = editingStoryId == "";
+            if(isNew){var result=await Api.Post("/admin/stories",story);activeStoryId=Ui.Str(result,"id");}
             else await Api.Put("/admin/stories/"+Uri.EscapeDataString(editingStoryId),story);
             storyRows=Ui.Array(await Api.Get("/admin/stories"));
             if(activeStoryId!="") await LoadEpisodes();
-            Notify("Đã lưu thông tin truyện. Tiếp theo, upload ảnh đại diện và các tập MP3 ở bước 2–3.");NewStory();
+            storyModalOpen=false;
+            NewStory();
+            Notify(isNew ? "Đã tạo bộ truyện mới. Bạn có thể upload ảnh đại diện, tập MP3 và file chữ bên dưới." : "Đã lưu cập nhật thông tin bộ truyện.");
         }
         catch(Exception e){Notify(e.Message,true);}
         finally{busy=false;}
