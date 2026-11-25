@@ -777,19 +777,152 @@
     }
     else if(tab=="orders")
     {
-        <div class="panel rounded-2xl"><h2>Đơn hàng &amp; lịch sử Admin cấp Premium</h2><p class="hint">Đơn tự mua cần đối soát ngân hàng; dòng Admin cấp/gia hạn chỉ ghi nhận quyền và lý do, không tính doanh thu, không có QR hay mã giao dịch ngân hàng.</p>
-        <div class="table-scroll overflow-x-auto"><table><thead><tr><th>Mã hồ sơ</th><th>Thành viên</th><th>Nguồn</th><th>Giá</th><th>Trạng thái</th><th>Thời gian</th><th></th></tr></thead><tbody>
-        @foreach(var o in orderRows)
-        {
-            var granted=Ui.Str(o,"order_type")=="AdminGrant";
-            var ordStatus = Ui.Str(o,"status");
-            <tr><td class="mono">@Ui.Str(o,"code")</td><td>@Ui.Str(o,"username")</td><td><span class="pill @(granted ? "premium-admin-badge" : "")">@(granted ? "Admin cấp" : "User tự mua")</span>@if(granted){<small class="order-subtitle">@Ui.Str(o,"grant_reason")</small>}</td><td>@(granted ? "0đ (cấp quyền)" : Ui.Money(Ui.Num(o,"amount_vnd")))</td><td><span class="storage-pill @(granted ? "premium-admin-badge" : Ui.OrderStatusBadgeClass(ordStatus))">@(granted ? "Đã cấp / gia hạn" : Ui.OrderStatus(ordStatus))</span></td><td>@Ui.Date(Ui.Str(o,"created_at"))</td><td><button class="text-link" @onclick="() => SelectOrder(o)">@(granted ? "Chi tiết" : "Đối soát")</button></td></tr>
-        }
-        </tbody></table></div></div>
+        var sortedOrders = FilteredAndSortedOrders;
+        <div class="panel rounded-2xl">
+            <div class="episode-list-toolbar" style="padding-top:0">
+                <div>
+                    <h2 style="margin:0">Đơn hàng &amp; lịch sử Admin cấp Premium (@sortedOrders.Length / @orderRows.Length)</h2>
+                    <small>Tìm kiếm theo mã đơn, thành viên, ngân hàng, lý do cấp và bấm tiêu đề từng cột để sắp xếp thứ tự Tăng dần ▲ / Giảm dần ▼</small>
+                </div>
+                @if (!string.IsNullOrWhiteSpace(orderSearch) || orderTypeFilter != "" || orderStatusFilter != "")
+                {
+                    <button type="button" class="btn btn-sm btn-outline" @onclick="ResetOrderFilters">× Xóa bộ lọc</button>
+                }
+            </div>
+
+            <div class="upload-grid text-filter-grid" style="margin-bottom:0.85rem">
+                <label>Tìm kiếm đơn hàng
+                    <input @bind="orderSearch" @bind:event="oninput" placeholder="Nhập mã đơn (LKH...), username, họ tên, ngân hàng, ghi chú..." />
+                </label>
+                <label>Lọc theo Nguồn đơn
+                    <select @bind="orderTypeFilter">
+                        <option value="">Tất cả nguồn (@orderRows.Length)</option>
+                        <option value="Purchase">💳 User tự mua VietQR</option>
+                        <option value="AdminGrant">♛ Admin cấp / gia hạn</option>
+                    </select>
+                </label>
+                <label>Lọc theo Trạng thái
+                    <select @bind="orderStatusFilter">
+                        <option value="">Tất cả trạng thái</option>
+                        <option value="Pending">Chờ chuyển khoản</option>
+                        <option value="Reviewing">Chờ đối soát</option>
+                        <option value="Paid">Đã thanh toán / Đã cấp</option>
+                        <option value="Rejected">Đã từ chối</option>
+                        <option value="Expired">Đã hết hạn</option>
+                        <option value="Cancelled">Đã hủy</option>
+                    </select>
+                </label>
+                <label>Sắp xếp theo thứ tự
+                    <select value="@OrderSortPreset" @onchange="OnOrderSortPresetChanged">
+                        <option value="created_at:desc">Thời gian: Mới nhất → Cũ nhất</option>
+                        <option value="created_at:asc">Thời gian: Cũ nhất → Mới nhất</option>
+                        <option value="code:asc">Mã hồ sơ: A → Z</option>
+                        <option value="code:desc">Mã hồ sơ: Z → A</option>
+                        <option value="username:asc">Thành viên: A → Z</option>
+                        <option value="username:desc">Thành viên: Z → A</option>
+                        <option value="amount_vnd:desc">Giá trị: Cao → Thấp</option>
+                        <option value="amount_vnd:asc">Giá trị: Thấp → Cao</option>
+                        <option value="status:asc">Trạng thái: A → Z</option>
+                        <option value="order_type:asc">Nguồn đơn: Admin cấp → Tự mua</option>
+                    </select>
+                </label>
+            </div>
+
+            @if (sortedOrders.Length == 0)
+            {
+                <p class="hint">Không tìm thấy đơn hàng nào khớp với từ khóa hoặc bộ lọc hiện tại.</p>
+            }
+            else
+            {
+                <div class="table-scroll overflow-x-auto">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th style="width:56px">
+                                    <button type="button" class="th-sort-btn @(orderSortField=="created_at"?"is-sorted":"")" @onclick='() => ToggleOrderSort("created_at")'>
+                                        STT @OrderSortIndicator("created_at")
+                                    </button>
+                                </th>
+                                <th>
+                                    <button type="button" class="th-sort-btn @(orderSortField=="code"?"is-sorted":"")" @onclick='() => ToggleOrderSort("code")'>
+                                        Mã hồ sơ @OrderSortIndicator("code")
+                                    </button>
+                                </th>
+                                <th>
+                                    <button type="button" class="th-sort-btn @(orderSortField=="username"?"is-sorted":"")" @onclick='() => ToggleOrderSort("username")'>
+                                        Thành viên @OrderSortIndicator("username")
+                                    </button>
+                                </th>
+                                <th>
+                                    <button type="button" class="th-sort-btn @(orderSortField=="order_type"?"is-sorted":"")" @onclick='() => ToggleOrderSort("order_type")'>
+                                        Nguồn @OrderSortIndicator("order_type")
+                                    </button>
+                                </th>
+                                <th>
+                                    <button type="button" class="th-sort-btn @(orderSortField=="amount_vnd"?"is-sorted":"")" @onclick='() => ToggleOrderSort("amount_vnd")'>
+                                        Giá @OrderSortIndicator("amount_vnd")
+                                    </button>
+                                </th>
+                                <th>
+                                    <button type="button" class="th-sort-btn @(orderSortField=="status"?"is-sorted":"")" @onclick='() => ToggleOrderSort("status")'>
+                                        Trạng thái @OrderSortIndicator("status")
+                                    </button>
+                                </th>
+                                <th>
+                                    <button type="button" class="th-sort-btn @(orderSortField=="created_at"?"is-sorted":"")" @onclick='() => ToggleOrderSort("created_at")'>
+                                        Thời gian @OrderSortIndicator("created_at")
+                                    </button>
+                                </th>
+                                <th></th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            @for (var i = 0; i < sortedOrders.Length; i++)
+                            {
+                                var o = sortedOrders[i];
+                                var oid = Ui.Str(o, "id");
+                                var granted = Ui.Str(o,"order_type")=="AdminGrant";
+                                var ordStatus = Ui.Str(o,"status");
+                                var reviewNote = Ui.Str(o,"review_note");
+                                <tr @key="oid" class="@(oid == activeOrderId ? "episode-just-uploaded" : "")">
+                                    <td class="mono"><b>@(i + 1)</b></td>
+                                    <td class="mono"><b>@Ui.Str(o,"code")</b></td>
+                                    <td>
+                                        <b>@Ui.Str(o,"username")</b>
+                                        @if (!string.IsNullOrWhiteSpace(Ui.Str(o,"full_name")))
+                                        {
+                                            <small class="order-subtitle">@Ui.Str(o,"full_name")</small>
+                                        }
+                                    </td>
+                                    <td>
+                                        <span class="pill @(granted ? "premium-admin-badge" : "")">@(granted ? "Admin cấp" : "User tự mua")</span>
+                                        @if(granted)
+                                        {
+                                            <small class="order-subtitle">@Ui.Str(o,"grant_reason")</small>
+                                        }
+                                        else if (!string.IsNullOrWhiteSpace(reviewNote))
+                                        {
+                                            <small class="order-subtitle">@reviewNote</small>
+                                        }
+                                    </td>
+                                    <td><b>@(granted ? "0đ (cấp quyền)" : Ui.Money(Ui.Num(o,"amount_vnd")))</b></td>
+                                    <td><span class="storage-pill @(granted ? "premium-admin-badge" : Ui.OrderStatusBadgeClass(ordStatus))">@(granted ? "Đã cấp / gia hạn" : Ui.OrderStatus(ordStatus))</span></td>
+                                    <td>@Ui.Date(Ui.Str(o,"created_at"))</td>
+                                    <td><button type="button" class="btn btn-sm btn-outline" @onclick="() => SelectOrder(o)">@(granted ? "Chi tiết" : "Đối soát")</button></td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+            }
+        </div>
         @if(activeOrderId!="")
         {
             <div class="panel top-margin form">
-                <h2>Hồ sơ @activeOrderCode</h2>
+                <div class="episode-list-toolbar" style="padding-top:0">
+                    <h2 style="margin:0">Hồ sơ @activeOrderCode</h2>
+                    <button type="button" class="btn btn-sm btn-outline" @onclick='() => activeOrderId = ""'>× Đóng</button>
+                </div>
                 @if(activeOrderType=="AdminGrant")
                 {
                     <div class="premium-reason"><b>Admin cấp / gia hạn Premium — không phát sinh thanh toán</b><p>@activeOrderReason</p></div>
@@ -1035,6 +1168,81 @@
     private string notepadFilterStoryId="",notepadFilterStorageTarget="",notepadSearch="",notepadUploadStoryId="",notepadUploadTitle="";
     private string userSearch="",userRoleFilter="",userStatusFilter="",userSortField="created_at";
     private bool userSortAsc=false;
+    private string orderSearch="",orderTypeFilter="",orderStatusFilter="",orderSortField="created_at";
+    private bool orderSortAsc=false;
+    private string OrderSortPreset => $"{orderSortField}:{(orderSortAsc ? "asc" : "desc")}";
+    private void ToggleOrderSort(string field)
+    {
+        if (orderSortField == field) orderSortAsc = !orderSortAsc;
+        else { orderSortField = field; orderSortAsc = field is "code" or "username" or "order_type" or "status"; }
+    }
+    private void OnOrderSortPresetChanged(ChangeEventArgs e)
+    {
+        var raw = Convert.ToString(e.Value) ?? "created_at:desc";
+        var parts = raw.Split(':', 2);
+        orderSortField = parts[0];
+        orderSortAsc = parts.Length > 1 && parts[1] == "asc";
+    }
+    private void ResetOrderFilters()
+    {
+        orderSearch = "";
+        orderTypeFilter = "";
+        orderStatusFilter = "";
+        orderSortField = "created_at";
+        orderSortAsc = false;
+    }
+    private string OrderSortIndicator(string field) => orderSortField == field ? (orderSortAsc ? "▲" : "▼") : "⇅";
+    private JsonElement[] FilteredAndSortedOrders
+    {
+        get
+        {
+            var q = (orderSearch ?? "").Trim();
+            var filtered = orderRows.Where(o =>
+            {
+                if (!string.IsNullOrWhiteSpace(orderTypeFilter) && !string.Equals(Ui.Str(o, "order_type"), orderTypeFilter, StringComparison.OrdinalIgnoreCase))
+                    return false;
+                if (!string.IsNullOrWhiteSpace(orderStatusFilter) && !string.Equals(Ui.Str(o, "status"), orderStatusFilter, StringComparison.OrdinalIgnoreCase))
+                    return false;
+                if (!string.IsNullOrWhiteSpace(q))
+                {
+                    var granted = Ui.Str(o, "order_type") == "AdminGrant";
+                    var statusLabel = granted ? "Đã cấp / gia hạn" : Ui.OrderStatus(Ui.Str(o, "status"));
+                    var match = Ui.Str(o, "code").Contains(q, StringComparison.OrdinalIgnoreCase)
+                                || Ui.Str(o, "username").Contains(q, StringComparison.OrdinalIgnoreCase)
+                                || Ui.Str(o, "full_name").Contains(q, StringComparison.OrdinalIgnoreCase)
+                                || Ui.Str(o, "bank_name").Contains(q, StringComparison.OrdinalIgnoreCase)
+                                || Ui.Str(o, "account_number").Contains(q, StringComparison.OrdinalIgnoreCase)
+                                || Ui.Str(o, "grant_reason").Contains(q, StringComparison.OrdinalIgnoreCase)
+                                || Ui.Str(o, "review_note").Contains(q, StringComparison.OrdinalIgnoreCase)
+                                || statusLabel.Contains(q, StringComparison.OrdinalIgnoreCase);
+                    if (!match) return false;
+                }
+                return true;
+            });
+
+            return (orderSortField switch
+            {
+                "code" => orderSortAsc
+                    ? filtered.OrderBy(o => Ui.Str(o, "code"), StringComparer.OrdinalIgnoreCase)
+                    : filtered.OrderByDescending(o => Ui.Str(o, "code"), StringComparer.OrdinalIgnoreCase),
+                "username" => orderSortAsc
+                    ? filtered.OrderBy(o => Ui.Str(o, "username"), StringComparer.OrdinalIgnoreCase).ThenByDescending(o => Ui.Str(o, "created_at"), StringComparer.Ordinal)
+                    : filtered.OrderByDescending(o => Ui.Str(o, "username"), StringComparer.OrdinalIgnoreCase).ThenByDescending(o => Ui.Str(o, "created_at"), StringComparer.Ordinal),
+                "order_type" => orderSortAsc
+                    ? filtered.OrderBy(o => Ui.Str(o, "order_type"), StringComparer.OrdinalIgnoreCase).ThenByDescending(o => Ui.Str(o, "created_at"), StringComparer.Ordinal)
+                    : filtered.OrderByDescending(o => Ui.Str(o, "order_type"), StringComparer.OrdinalIgnoreCase).ThenByDescending(o => Ui.Str(o, "created_at"), StringComparer.Ordinal),
+                "amount_vnd" => orderSortAsc
+                    ? filtered.OrderBy(o => Ui.Num(o, "amount_vnd")).ThenByDescending(o => Ui.Str(o, "created_at"), StringComparer.Ordinal)
+                    : filtered.OrderByDescending(o => Ui.Num(o, "amount_vnd")).ThenByDescending(o => Ui.Str(o, "created_at"), StringComparer.Ordinal),
+                "status" => orderSortAsc
+                    ? filtered.OrderBy(o => Ui.OrderStatus(Ui.Str(o, "status")), StringComparer.CurrentCultureIgnoreCase).ThenByDescending(o => Ui.Str(o, "created_at"), StringComparer.Ordinal)
+                    : filtered.OrderByDescending(o => Ui.OrderStatus(Ui.Str(o, "status")), StringComparer.CurrentCultureIgnoreCase).ThenByDescending(o => Ui.Str(o, "created_at"), StringComparer.Ordinal),
+                _ => orderSortAsc
+                    ? filtered.OrderBy(o => Ui.Str(o, "created_at"), StringComparer.Ordinal)
+                    : filtered.OrderByDescending(o => Ui.Str(o, "created_at"), StringComparer.Ordinal)
+            }).ToArray();
+        }
+    }
     private string UserSortPreset => $"{userSortField}:{(userSortAsc ? "asc" : "desc")}";
     private void ToggleUserSort(string field)
     {
