@@ -64,13 +64,15 @@
                 <p class="story-folder-label"><b>Thư mục R2:</b> <code>@ActiveStoryPrefix</code></p>
                 <h3 class="step-title"><span>2</span> Ảnh đại diện bộ truyện</h3>
                 <p class="hint">Khi thay ảnh, ứng dụng lưu ảnh mới trước, cập nhật tham chiếu trong SQLite, sau đó xóa object ảnh cũ trên R2. Nếu xóa lỗi, có thể dọn lại bên dưới.</p>
-                <div class="upload-grid cover-upload">
+                <div class="upload-grid cover-upload-grid">
                     <label>Ảnh bìa bộ truyện (JPG/PNG/WebP, tối đa 8MB)
-                        <input id="cover-file" type="file" accept=".jpg,.jpeg,.png,.webp,image/jpeg,image/png,image/webp" />
+                        <input id="cover-file" class="file-picker-input" type="file" accept=".jpg,.jpeg,.png,.webp,image/jpeg,image/png,image/webp" />
                     </label>
-                    <button class="btn btn-primary" disabled="@busy" @onclick="UploadCover">@(string.IsNullOrWhiteSpace(Ui.Str(ActiveStory,"cover_file")) ? "↑ Upload ảnh bìa" : "↻ Thay ảnh bìa & dọn ảnh cũ")</button>
-                    @if(Ui.Str(ActiveStory,"cover_file").StartsWith("cover-local:",StringComparison.Ordinal) && Ui.Str(storageInfo,"mode")=="R2")
-                    { <button class="btn btn-outline" disabled="@busy" @onclick="MigrateCover">↑ Chuyển ảnh Local lên R2</button> }
+                    <div class="table-actions">
+                        <button type="button" class="btn btn-primary" disabled="@busy" @onclick="UploadCover">@(string.IsNullOrWhiteSpace(Ui.Str(ActiveStory,"cover_file")) ? "↑ Upload ảnh bìa" : "↻ Thay ảnh bìa & dọn ảnh cũ")</button>
+                        @if(Ui.Str(ActiveStory,"cover_file").StartsWith("cover-local:",StringComparison.Ordinal) && Ui.Str(storageInfo,"mode")=="R2")
+                        { <button type="button" class="btn btn-outline" disabled="@busy" @onclick="MigrateCover">↑ Chuyển ảnh Local lên R2</button> }
+                    </div>
                 </div>
                 @if(!string.IsNullOrWhiteSpace(ActiveCoverUrl))
                 { <img src="@ActiveCoverUrl" class="admin-story-cover" alt="Ảnh bìa truyện" /> }
@@ -145,17 +147,19 @@
                         }
                     </div>
                 </div>
-                <div class="upload-grid">
-                    <label>Ghi chú / Tiêu đề (tùy chọn)
-                        <input @bind="textFileTitle" maxlength="180" placeholder="Ví dụ: Bản thảo quyển 1, Toàn văn..." />
-                    </label>
-                    <label>Chọn 1 hoặc nhiều file (.md, .txt · tối đa 50MB/file)
-                        <input type="file" id="story-text-files" multiple accept=".md,.txt,text/markdown,text/plain" />
-                    </label>
-                    <div class="table-actions" style="align-self:end">
-                        <button class="btn btn-primary" disabled="@busy" @onclick='() => UploadStoryTexts("vps")'>@(uploadingTexts && uploadingTarget == "vps" ? "⏳ Đang lưu VPS..." : "💾 Upload lên VPS")</button>
-                        <button class="btn btn-outline" disabled="@busy" @onclick='() => UploadStoryTexts("drive")'>@(uploadingTexts && uploadingTarget == "drive" ? "⏳ Đang lưu Drive..." : "☁ Upload lên Drive")</button>
-                        <button class="btn btn-gold" disabled="@busy" @onclick='() => UploadStoryTexts("both")'>@(uploadingTexts && uploadingTarget == "both" ? "⏳ Đang lưu cả 2..." : "⇄ Giữ cả VPS & Drive (Dự phòng)")</button>
+                <div class="text-upload-card">
+                    <div class="text-upload-fields">
+                        <label>Ghi chú / Tiêu đề (tùy chọn)
+                            <input @bind="textFileTitle" maxlength="180" placeholder="Ví dụ: Bản thảo quyển 1, Toàn văn..." />
+                        </label>
+                        <label>Chọn 1 hoặc nhiều file (.md, .txt · tối đa 50MB/file)
+                            <input type="file" id="story-text-files" class="file-picker-input" multiple accept=".md,.txt" />
+                        </label>
+                    </div>
+                    <div class="text-upload-actions">
+                        <button type="button" class="btn btn-primary" disabled="@busy" @onclick='() => UploadStoryTexts("vps")'>@(uploadingTexts && uploadingTarget == "vps" ? "⏳ Đang lưu VPS..." : "💾 Upload lên VPS")</button>
+                        <button type="button" class="btn btn-outline" disabled="@busy" @onclick='() => UploadStoryTexts("drive")'>@(uploadingTexts && uploadingTarget == "drive" ? "⏳ Đang lưu Drive..." : "☁ Upload lên Drive")</button>
+                        <button type="button" class="btn btn-gold" disabled="@busy" @onclick='() => UploadStoryTexts("both")'>@(uploadingTexts && uploadingTarget == "both" ? "⏳ Đang lưu cả 2..." : "⇄ Giữ cả VPS & Drive (Dự phòng)")</button>
                     </div>
                 </div>
                 <div class="episode-list-toolbar">
@@ -296,7 +300,7 @@
                 <div class="inline-editor top-margin">
                     <h3>⚙ Cấu hình Google Cloud OAuth 2.0 Client</h3>
                     <p class="hint">Authorized redirect URI cần khai báo trong Google Cloud Console: <code>@($"{Navigation.BaseUri.TrimEnd('/')}/api/admin/gdrive/callback")</code></p>
-                    <div class="upload-grid">
+                    <div class="upload-grid text-filter-grid">
                         <label>Client ID
                             <input @bind="gdriveClientIdInput" autocomplete="off" placeholder="...apps.googleusercontent.com" />
                         </label>
@@ -306,7 +310,7 @@
                         <label>Tên thư mục gốc trên Google Drive
                             <input @bind="gdriveRootFolderInput" placeholder="LangKinhHuKhong-BanThao" />
                         </label>
-                        <button class="btn btn-primary" disabled="@busy" @onclick="SaveGoogleDriveConfig">Lưu cấu hình OAuth</button>
+                        <button type="button" class="btn btn-primary" disabled="@busy" @onclick="SaveGoogleDriveConfig">Lưu cấu hình OAuth</button>
                     </div>
                 </div>
             }
@@ -332,11 +336,11 @@
                         </div>
                     </div>
 
-                    <div class="upload-grid" style="margin-top:0.65rem">
+                    <div class="upload-grid cover-upload-grid" style="margin-top:0.65rem">
                         <label>Tạo thư mục con mới trên Google Drive (trong thư mục hiện tại)
                             <input @bind="driveNewFolderName" maxlength="150" placeholder="Nhập tên thư mục mới..." />
                         </label>
-                        <button class="btn btn-outline" disabled="@busy" @onclick="CreateDriveSubfolder">+ Tạo thư mục trên Drive</button>
+                        <button type="button" class="btn btn-outline" disabled="@busy" @onclick="CreateDriveSubfolder">+ Tạo thư mục trên Drive</button>
                     </div>
 
                     @if (driveItems.Length == 0)
@@ -418,31 +422,33 @@
                 </div>
             </div>
 
-            <div class="upload-grid top-margin">
-                <label>Bộ truyện nhận file upload
-                    <select @bind="notepadUploadStoryId">
-                        <option value="">-- Chọn bộ truyện --</option>
-                        @foreach (var s in storyRows)
-                        {
-                            <option value="@Ui.Str(s, "id")">@Ui.Str(s, "title")</option>
-                        }
-                    </select>
-                </label>
-                <label>Ghi chú / Tiêu đề (tùy chọn)
-                    <input @bind="notepadUploadTitle" maxlength="180" placeholder="Ví dụ: Bản thảo chương 1-20..." />
-                </label>
-                <label>Chọn 1 hoặc nhiều file (.md, .txt · tối đa 50MB/file)
-                    <input type="file" id="notepad-text-files" multiple accept=".md,.txt,text/markdown,text/plain" />
-                </label>
-                <div class="table-actions" style="align-self:end">
-                    <button class="btn btn-primary" disabled="@busy" @onclick='() => UploadFromNotepadTab("vps")'>@(uploadingTexts && uploadingTarget == "vps" ? "⏳ Đang lưu VPS..." : "💾 Upload lên VPS")</button>
-                    <button class="btn btn-outline" disabled="@busy" @onclick='() => UploadFromNotepadTab("drive")'>@(uploadingTexts && uploadingTarget == "drive" ? "⏳ Đang lưu Drive..." : "☁ Upload lên Drive")</button>
-                    <button class="btn btn-gold" disabled="@busy" @onclick='() => UploadFromNotepadTab("both")'>@(uploadingTexts && uploadingTarget == "both" ? "⏳ Đang lưu cả 2..." : "⇄ Upload cả 2 (VPS + Drive dự phòng)")</button>
+            <div class="text-upload-card top-margin">
+                <div class="text-upload-fields text-upload-fields-3">
+                    <label>Bộ truyện nhận file upload
+                        <select @bind="notepadUploadStoryId">
+                            <option value="">-- Chọn bộ truyện --</option>
+                            @foreach (var s in storyRows)
+                            {
+                                <option value="@Ui.Str(s, "id")">@Ui.Str(s, "title")</option>
+                            }
+                        </select>
+                    </label>
+                    <label>Ghi chú / Tiêu đề (tùy chọn)
+                        <input @bind="notepadUploadTitle" maxlength="180" placeholder="Ví dụ: Bản thảo chương 1-20..." />
+                    </label>
+                    <label>Chọn 1 hoặc nhiều file (.md, .txt · tối đa 50MB/file)
+                        <input type="file" id="notepad-text-files" class="file-picker-input" multiple accept=".md,.txt" />
+                    </label>
+                </div>
+                <div class="text-upload-actions">
+                    <button type="button" class="btn btn-primary" disabled="@busy" @onclick='() => UploadFromNotepadTab("vps")'>@(uploadingTexts && uploadingTarget == "vps" ? "⏳ Đang lưu VPS..." : "💾 Upload lên VPS")</button>
+                    <button type="button" class="btn btn-outline" disabled="@busy" @onclick='() => UploadFromNotepadTab("drive")'>@(uploadingTexts && uploadingTarget == "drive" ? "⏳ Đang lưu Drive..." : "☁ Upload lên Drive")</button>
+                    <button type="button" class="btn btn-gold" disabled="@busy" @onclick='() => UploadFromNotepadTab("both")'>@(uploadingTexts && uploadingTarget == "both" ? "⏳ Đang lưu cả 2..." : "⇄ Upload cả 2 (VPS + Drive dự phòng)")</button>
                 </div>
             </div>
 
             <div class="divider"></div>
-            <div class="upload-grid" style="margin-bottom:0.75rem">
+            <div class="upload-grid text-filter-grid" style="margin-bottom:0.75rem">
                 <label>Lọc theo bộ truyện
                     <select @bind="notepadFilterStoryId">
                         <option value="">Tất cả bộ truyện (@allTextFileRows.Length file)</option>

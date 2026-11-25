@@ -262,3 +262,18 @@
 .notepad-dialog-meta{grid-template-columns:repeat(auto-fit,minmax(185px,1fr));margin-top:16px}
 .notepad-dialog .online-notepad-textarea{min-height:460px;height:52vh}
 @media(max-width:640px){.notepad-dialog-overlay{padding:10px}.notepad-dialog{width:100%;max-height:95vh;padding:16px}.notepad-dialog-header{top:-16px;margin:-16px -16px 0;padding:14px 16px 12px}.notepad-dialog .online-notepad-textarea{min-height:340px;height:48vh}}
+
+/* V1.9.7.1 – Fix file picker overlap in story text upload & filter grids */
+.text-upload-card{display:flex;flex-direction:column;gap:12px;padding:15px 16px;margin:10px 0 14px;background:#f8f9ff;border:1px solid #e3e7f7;border-radius:14px}
+.text-upload-fields{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px;align-items:end}
+.text-upload-fields-3{grid-template-columns:repeat(auto-fit,minmax(200px,1fr))}
+.text-upload-card label{display:flex;flex-direction:column;gap:7px;font-size:11px;color:#5a6782;font-weight:750;min-width:0}
+.text-upload-card input,.text-upload-card select,.upload-grid select{width:100%;min-height:42px;outline:0;background:#ffffff;border:1px solid #d7def0;border-radius:10px;padding:9px 12px;color:#25334d;font-size:12px;transition:all .16s}
+.text-upload-card input:focus,.text-upload-card select:focus,.upload-grid select:focus{border-color:#9e8ff2;box-shadow:0 0 0 4px rgba(101,87,220,.1)}
+.file-picker-input{position:relative;z-index:2;cursor:pointer;padding:6px 10px!important;background:#ffffff!important}
+.file-picker-input::file-selector-button{margin-right:10px;padding:6px 12px;border:1px solid #d5cffc;border-radius:8px;background:#eeebff;color:#5849cf;font-weight:750;font-size:11px;cursor:pointer;transition:background .15s}
+.file-picker-input::file-selector-button:hover{background:#e1dcff}
+.text-upload-actions{display:flex;flex-wrap:wrap;align-items:center;gap:8px;padding-top:2px}
+.cover-upload-grid{grid-template-columns:minmax(220px,1fr) auto!important;margin:12px 0;align-items:end}
+.text-filter-grid{grid-template-columns:repeat(auto-fit,minmax(200px,1fr))!important;align-items:end}
+@media(max-width:780px){.cover-upload-grid,.text-filter-grid,.text-upload-fields,.text-upload-fields-3{grid-template-columns:1fr!important}}
