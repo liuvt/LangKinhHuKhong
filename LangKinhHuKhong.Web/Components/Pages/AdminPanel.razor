@@ -285,20 +285,15 @@
                     {
                         <p class="hint" style="margin:0.35rem 0 0">
                             <span class="storage-pill storage-r2">● Đã kết nối Google Drive</span>
-                            Tài khoản: <b>@(Ui.Str(gdriveStatus, "email") != "" ? Ui.Str(gdriveStatus, "email") : Ui.Str(gdriveStatus, "displayName"))</b>
-                            · Thư mục gốc: <code>@Ui.Str(gdriveStatus, "rootFolderName")</code>
+                            <b>@(Ui.Str(gdriveStatus, "email") != "" ? Ui.Str(gdriveStatus, "email") : Ui.Str(gdriveStatus, "displayName"))</b>
+                            · <code>@Ui.Str(gdriveStatus, "rootFolderName")</code>
                         </p>
                     }
                     else if (Ui.Bool(gdriveStatus, "configured") || Ui.Bool(gdriveStatus, "hasClientConfig"))
                     {
                         <p class="hint" style="margin:0.35rem 0 0">
                             <span class="storage-pill storage-local">○ Đã nạp OAuth Client (@Ui.Str(gdriveStatus, "clientIdPreview"))</span>
-                            Bấm nút <b>"Liên kết"</b> để kết nối tài khoản Google Drive hoặc cấu hình đồng bộ dự phòng.
                         </p>
-                    }
-                    else
-                    {
-                        <p class="hint" style="margin:0.35rem 0 0">Chưa cấu hình kết nối Google Drive. Bấm nút <b>"Liên kết"</b> để thiết lập OAuth Client và đồng bộ dự phòng VPS ⇄ Google Drive.</p>
                     }
                 </div>
                 <div class="table-actions">
@@ -311,7 +306,6 @@
             <div class="episode-list-toolbar">
                 <div>
                     <h2>📝 Quản lý Bản thảo (.md, .txt) &amp; Notepad Online (VPS / Google Drive / Dự phòng Cả 2)</h2>
-                    <p class="hint">Bấm <b>"+ Thêm mới"</b> để tải file chữ (.md, .txt) lên hoặc soạn mới bằng Notepad Online trên <b>💾 VPS</b>, <b>☁ Google Drive</b> hoặc <b>⇄ Giữ cả 2 nơi (Dự phòng)</b>.</p>
                 </div>
                 <div class="table-actions">
                     <button type="button" class="btn btn-primary" disabled="@busy" @onclick="OpenTextCreateModal">+ Thêm mới</button>
