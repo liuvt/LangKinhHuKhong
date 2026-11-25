@@ -362,7 +362,18 @@ public sealed class GoogleDriveService
 
             var body = await res.Content.ReadAsStringAsync(ct);
             if (!res.IsSuccessStatusCode)
+            {
+                if (body.Contains("invalid_grant", StringComparison.OrdinalIgnoreCase))
+                {
+                    cfg.ProtectedRefreshToken = "";
+                    cfg.PlainRefreshTokenFallback = "";
+                    cfg.UpdatedAt = Helpers.Now();
+                    cachedAccessToken = null;
+                    SaveConfigInternal(cfg);
+                    throw new InvalidOperationException("Phiên kết nối Google Drive đã hết hạn (invalid_grant). Vui lòng bấm '🔗 Kết nối tài khoản Google Drive' để cấp quyền lại.");
+                }
                 throw new InvalidOperationException("Không làm mới được phiên Google Drive (hãy bấm Kết nối lại): " + body);
+            }
 
             using var doc = JsonDocument.Parse(body);
             var token = doc.RootElement.TryGetProperty("access_token", out var at) ? at.GetString() ?? "" : "";

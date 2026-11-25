@@ -797,7 +797,7 @@ admin.MapGet("/stories", async Task<IResult> (Database source) =>
     await using var db = await source.OpenAsync();
     return Results.Ok(await db.ListAsync(@"
         WITH g_keys AS (
-            SELECT sg.story_id, group_concat(g.slug,'|') AS keys
+            SELECT sg.story_id, group_concat(g.slug,'|') AS keys, group_concat(g.name,' · ') AS names
             FROM story_genres sg JOIN genres g ON g.slug=sg.genre_slug GROUP BY sg.story_id
         ),
         ep_cnt AS (SELECT story_id, COUNT(*) AS cnt FROM episodes GROUP BY story_id),
@@ -805,6 +805,7 @@ admin.MapGet("/stories", async Task<IResult> (Database source) =>
         SELECT stories.*,
         CASE WHEN stories.cover_file<>'' THEN '/api/stories/' || stories.id || '/cover' ELSE stories.cover_url END AS cover_image_url,
         COALESCE(gk.keys,'') AS genre_keys,
+        COALESCE(NULLIF(gk.names,''), stories.genre, '') AS genre_names,
         COALESCE(ec.cnt,0) AS episode_count,
         COALESCE(tc.cnt,0) AS text_count
         FROM stories
@@ -1499,11 +1500,19 @@ admin.MapPost("/stories/{id}/texts", async Task<IResult> (string id, HttpRequest
 
             if (itemTarget is "drive" or "both")
             {
-                if (string.IsNullOrWhiteSpace(driveFolderId))
-                    driveFolderId = await gdrive.EnsureStoryFolderAsync(db, id, ctx.RequestAborted);
-                var (savedDriveId, driveMod) = await gdrive.UpsertTextFileOnDriveWithMetaAsync(driveFolderId, driveFileId, rawName, itemTitle, fileBytes, ext, ctx.RequestAborted);
-                driveFileId = savedDriveId;
-                if (!string.IsNullOrWhiteSpace(driveMod)) now = driveMod;
+                try
+                {
+                    if (string.IsNullOrWhiteSpace(driveFolderId))
+                        driveFolderId = await gdrive.EnsureStoryFolderAsync(db, id, ctx.RequestAborted);
+                    var (savedDriveId, driveMod) = await gdrive.UpsertTextFileOnDriveWithMetaAsync(driveFolderId, driveFileId, rawName, itemTitle, fileBytes, ext, ctx.RequestAborted);
+                    driveFileId = savedDriveId;
+                    if (!string.IsNullOrWhiteSpace(driveMod)) now = driveMod;
+                }
+                catch
+                {
+                    if (target is "drive" or "both") throw;
+                    itemTarget = "vps";
+                }
             }
 
             if (destPath != "")

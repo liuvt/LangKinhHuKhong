@@ -277,3 +277,23 @@
 .cover-upload-grid{grid-template-columns:minmax(220px,1fr) auto!important;margin:12px 0;align-items:end}
 .text-filter-grid{grid-template-columns:repeat(auto-fit,minmax(200px,1fr))!important;align-items:end}
 @media(max-width:780px){.cover-upload-grid,.text-filter-grid,.text-upload-fields,.text-upload-fields-3{grid-template-columns:1fr!important}}
+
+/* V1.9.7.2 – Admin story list card layout & 4-step workflow grid */
+.story-workflow{grid-template-columns:repeat(4,minmax(0,1fr))}
+@media(max-width:1100px){.story-workflow{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media(max-width:600px){.story-workflow{grid-template-columns:1fr}}
+.admin-story-list{max-height:660px;padding-right:4px}
+.admin-story-item{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;padding:13px 14px;border:1px solid #e6eaf4;border-radius:14px;background:#fcfdff;transition:border-color .16s,background .16s,box-shadow .16s}
+.admin-story-item:hover{border-color:#cfc9fa;background:#faf9ff}
+.admin-story-item-active{border-color:#8b7df2;background:#f5f3ff;box-shadow:0 6px 18px rgba(101,87,220,.1)}
+.admin-story-thumb{width:46px;height:62px;flex:0 0 46px;border-radius:9px;overflow:hidden;display:grid;place-items:center;background:linear-gradient(140deg,#e4e0ff,#cbd6f8);color:#5c4fd1;font-size:18px;border:1px solid #e1def6}
+.admin-story-thumb img{width:100%;height:100%;object-fit:cover;display:block}
+.admin-story-info{flex:1;min-width:0;display:flex;flex-direction:column;gap:5px}
+.admin-story-title-row{display:flex;align-items:flex-start;justify-content:space-between;gap:8px;flex-wrap:wrap}
+.admin-story-title-row b{font-size:13px;line-height:1.4;color:#232f48;overflow-wrap:anywhere;flex:1;min-width:150px}
+.admin-story-meta-row{display:flex;align-items:center;flex-wrap:wrap;gap:6px 12px;font-size:11px;color:#515f79}
+.admin-story-stat b{display:inline!important;color:#3d4a66;font-weight:800}
+.admin-story-genres{margin-top:1px!important;font-size:10.5px!important;line-height:1.5;color:#7a869e!important;overflow-wrap:anywhere}
+.admin-story-actions{display:flex;flex-direction:column;align-items:stretch;gap:6px;flex-shrink:0;align-self:center}
+.admin-story-actions .btn{width:100%;justify-content:center}
+@media(max-width:600px){.admin-story-item{flex-wrap:wrap}.admin-story-actions{flex-direction:row;width:100%;margin-top:6px}.admin-story-actions .btn{flex:1}}

@@ -56,7 +56,61 @@
                 <button class="btn btn-primary" disabled="@busy" @onclick="SaveStory">@(editingStoryId==""?"Tạo truyện":"Lưu cập nhật")</button>
                 @if(editingStoryId!=""){<button class="btn btn-outline" @onclick="NewStory">+ Thêm truyện mới</button>}
             </div>
-            <div class="panel rounded-2xl"><h2>Danh sách bộ truyện (@storyRows.Length)</h2><div class="admin-story-list">@foreach(var s in storyRows){<div class="admin-story-item rounded-xl"><div><b>@Ui.Str(s,"title")</b><small>@Ui.Str(s,"slug") · @Ui.Str(s,"status") · @Ui.Num(s,"episode_count") tập MP3 · @Ui.Num(s,"text_count") file chữ · @Ui.Str(s,"genre_keys").Replace("|", " / ")</small></div><div class="table-actions"><button class="btn btn-sm btn-outline" @onclick="() => EditStory(s)">Sửa</button><button class="btn btn-sm btn-primary" @onclick='() => SelectStory(Ui.Str(s,"id"))'>MP3 &amp; File chữ</button></div></div>}</div></div>
+            <div class="panel rounded-2xl">
+                <div class="episode-list-toolbar" style="padding-top:0">
+                    <div>
+                        <h2 style="margin:0">Danh sách bộ truyện (@storyRows.Length)</h2>
+                        <small>Chọn "MP3 &amp; File chữ" để quản lý ảnh bìa, các tập audio và kho file bản thảo (.md, .txt)</small>
+                    </div>
+                </div>
+                <div class="admin-story-list">
+                    @foreach(var s in storyRows)
+                    {
+                        var sid = Ui.Str(s, "id");
+                        var stStatus = Ui.Str(s, "status");
+                        var coverThumb = Ui.Str(s, "cover_image_url");
+                        var genreNames = Ui.Str(s, "genre_names");
+                        if (string.IsNullOrWhiteSpace(genreNames)) genreNames = Ui.Str(s, "genre");
+                        var isSelectedStory = sid == activeStoryId || sid == editingStoryId;
+                        <div @key="sid" class="admin-story-item rounded-xl @(isSelectedStory ? "admin-story-item-active" : "")">
+                            <span class="admin-story-thumb">
+                                @if (!string.IsNullOrWhiteSpace(coverThumb))
+                                {
+                                    <img src="@coverThumb" alt="@Ui.Str(s, "title")" loading="lazy" />
+                                }
+                                else
+                                {
+                                    <span>◈</span>
+                                }
+                            </span>
+                            <div class="admin-story-info">
+                                <div class="admin-story-title-row">
+                                    <b>@Ui.Str(s, "title")</b>
+                                    <span class="storage-pill @(stStatus == "Published" ? "storage-r2" : "storage-local")">
+                                        @(stStatus == "Published" ? "● Phát hành" : stStatus == "Draft" ? "○ Bản nháp" : "◌ Đang ẩn")
+                                    </span>
+                                </div>
+                                <div class="admin-story-meta-row">
+                                    <span class="admin-story-stat">🎧 <b>@Ui.Num(s, "episode_count")</b> tập MP3</span>
+                                    <span class="admin-story-stat">📝 <b>@Ui.Num(s, "text_count")</b> file chữ</span>
+                                    @if (!string.IsNullOrWhiteSpace(Ui.Str(s, "author")))
+                                    {
+                                        <span class="admin-story-stat">✍ @Ui.Str(s, "author")</span>
+                                    }
+                                </div>
+                                @if (!string.IsNullOrWhiteSpace(genreNames))
+                                {
+                                    <small class="admin-story-genres">@genreNames</small>
+                                }
+                            </div>
+                            <div class="admin-story-actions">
+                                <button type="button" class="btn btn-sm btn-outline" @onclick="() => EditStory(s)">✎ Sửa</button>
+                                <button type="button" class="btn btn-sm btn-primary" @onclick="() => SelectStory(sid)">📂 MP3 &amp; File chữ</button>
+                            </div>
+                        </div>
+                    }
+                </div>
+            </div>
         </div>
         @if(!string.IsNullOrEmpty(activeStoryId))
         {
@@ -921,7 +975,7 @@
             });
             storyRows = (await db.ListAsync(@"
                 WITH g_keys AS (
-                    SELECT sg.story_id, group_concat(g.slug,'|') AS keys
+                    SELECT sg.story_id, group_concat(g.slug,'|') AS keys, group_concat(g.name,' · ') AS names
                     FROM story_genres sg JOIN genres g ON g.slug=sg.genre_slug GROUP BY sg.story_id
                 ),
                 ep_cnt AS (SELECT story_id, COUNT(*) AS cnt FROM episodes GROUP BY story_id),
@@ -929,6 +983,7 @@
                 SELECT stories.*,
                 CASE WHEN stories.cover_file<>'' THEN '/api/stories/' || stories.id || '/cover' ELSE stories.cover_url END AS cover_image_url,
                 COALESCE(gk.keys,'') AS genre_keys,
+                COALESCE(NULLIF(gk.names,''), stories.genre, '') AS genre_names,
                 COALESCE(ec.cnt,0) AS episode_count,
                 COALESCE(tc.cnt,0) AS text_count
                 FROM stories
