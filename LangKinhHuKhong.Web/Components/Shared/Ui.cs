@@ -53,4 +53,52 @@ public static class Ui
         if (b >= 1024) return (b / 1024.0).ToString("0.#", CultureInfo.GetCultureInfo("vi-VN")) + " KB";
         return b + " B";
     }
+    public static string OrderStatus(string? status) => (status ?? "").Trim() switch
+    {
+        "Pending" => "Chờ chuyển khoản",
+        "Reviewing" => "Chờ đối soát",
+        "Paid" => "Đã thanh toán",
+        "Rejected" => "Đã từ chối",
+        "Expired" => "Đã hết hạn",
+        "Cancelled" => "Đã hủy",
+        "Refunded" => "Đã hoàn tiền",
+        _ => string.IsNullOrWhiteSpace(status) ? "—" : status
+    };
+    public static string OrderStatusBadgeClass(string? status) => (status ?? "").Trim() switch
+    {
+        "Paid" => "storage-r2",
+        "Pending" or "Reviewing" => "pill",
+        _ => "storage-local"
+    };
+    public static string UserStatus(string? status) => (status ?? "").Trim() switch
+    {
+        "Active" => "Hoạt động",
+        "Locked" => "Đã khóa",
+        "Deleted" => "Đã xóa",
+        _ => string.IsNullOrWhiteSpace(status) ? "—" : status
+    };
+    public static string EpisodeStatus(string? status) => (status ?? "").Trim() switch
+    {
+        "Published" => "Phát hành",
+        "Hidden" => "Đang ẩn",
+        "Draft" => "Bản nháp",
+        _ => string.IsNullOrWhiteSpace(status) ? "—" : status
+    };
+    public static string ReviewStatus(string? status) => (status ?? "").Trim() switch
+    {
+        "Visible" => "Đang hiển thị",
+        "Hidden" => "Đã ẩn",
+        _ => string.IsNullOrWhiteSpace(status) ? "—" : status
+    };
+    public static string SePayStatus(string? status) => (status ?? "").Trim() switch
+    {
+        "Confirmed" => "Đã duyệt tự động",
+        "AlreadyPaid" or "AlreadyProcessed" => "Đã thanh toán trước đó",
+        "Underpaid" => "Chuyển thiếu tiền",
+        "OrderNotFound" => "Không khớp mã đơn",
+        "IgnoredOut" => "Giao dịch tiền ra (bỏ qua)",
+        "InvalidSignature" => "Sai chữ ký HMAC",
+        "InvalidJson" => "Dữ liệu JSON lỗi",
+        _ => string.IsNullOrWhiteSpace(status) ? "—" : status
+    };
 }

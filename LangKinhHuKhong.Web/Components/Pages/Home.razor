@@ -411,7 +411,7 @@
                                     var durationLabel = premiumEnd == "" ? Ui.Num(order,"duration_months").ToString() + " tháng" : "Đến " + Ui.Date(premiumEnd);
                                     <tr>
                                         <td class="mono">@Ui.Str(order,"code")</td>
-                                        <td><span class="pill @(adminGranted ? "premium-admin-badge" : "")">@(adminGranted ? "Admin cấp / gia hạn" : "Tự mua VietQR")</span><small class="order-subtitle">@(adminGranted ? Ui.Str(order,"grant_reason") : Ui.Str(order,"status"))</small></td>
+                                        <td><span class="pill @(adminGranted ? "premium-admin-badge" : "")">@(adminGranted ? "Admin cấp / gia hạn" : "Tự mua VietQR")</span><small class="order-subtitle">@(adminGranted ? Ui.Str(order,"grant_reason") : Ui.OrderStatus(Ui.Str(order,"status")))</small></td>
                                         <td>@durationLabel</td>
                                         <td>@(adminGranted ? "Miễn phí (Admin cấp)" : Ui.Money(Ui.Num(order,"amount_vnd")))</td>
                                         <td>@Ui.Date(Ui.Str(order,"created_at"))</td>

@@ -123,7 +123,7 @@
                     <span><b>Danh sách tập (@episodeRows.Length)</b><small>Danh sách tự đồng bộ sau khi upload xong</small></span>
                     <button class="btn btn-sm btn-outline" disabled="@(busy || refreshingEpisodes)" @onclick="RefreshEpisodeList">@(refreshingEpisodes ? "⏳ Đang tải..." : "↻ Làm mới danh sách")</button>
                 </div>
-                <div class="table-scroll overflow-x-auto"><table><thead><tr><th>Số tập</th><th>Tiêu đề</th><th>Thời lượng</th><th>Trạng thái</th><th>Lưu trữ</th><th></th></tr></thead><tbody>@foreach(var ep in episodeRows){<tr @key='Ui.Str(ep,"id")' class="@(Ui.Str(ep,"id")==lastUploadedEpisodeId ? "episode-just-uploaded" : "")"><td>@Ui.Num(ep,"episode_number")</td><td>@Ui.Str(ep,"title")</td><td>@Ui.Duration(Ui.Num(ep,"duration_seconds"))</td><td>@Ui.Str(ep,"status")</td><td><span class="storage-pill @(Ui.Str(ep,"storage")=="R2" ? "storage-r2" : "storage-local")">@(Ui.Str(ep,"storage")=="R2" ? (Ui.Str(ep,"organization")=="Grouped" ? "☁ R2 / Truyện" : "☁ R2 cũ") : "💾 Local")</span><small class="hls-ready-label">@(Ui.Num(ep,"hls_ready")==1 ? "🔒 HLS Premium sẵn sàng" : "⚠ Chưa tạo HLS")</small></td><td><div class="table-actions"><button class="text-link" disabled="@busy" @onclick="() => EditEpisode(ep)">Sửa / Thay MP3</button>@if(Ui.Num(ep,"hls_ready")!=1) { <button class="btn btn-sm btn-outline" disabled="@busy" @onclick='() => PrepareHls(Ui.Str(ep,"id"))'>🔒 Tạo HLS</button> }<button class="btn btn-sm btn-danger-outline" disabled="@busy" @onclick="() => AskDeleteEpisode(ep)">Xóa</button>@if(Ui.Str(ep,"organization")!="Grouped" && Ui.Str(storageInfo,"mode")=="R2") { <button class="btn btn-sm btn-outline" disabled="@busy" @onclick='() => MigrateEpisode(Ui.Str(ep,"id"))'>↑ Vào thư mục truyện</button> }</div></td></tr>}</tbody></table></div>
+                <div class="table-scroll overflow-x-auto"><table><thead><tr><th>Số tập</th><th>Tiêu đề</th><th>Thời lượng</th><th>Trạng thái</th><th>Lưu trữ</th><th></th></tr></thead><tbody>@foreach(var ep in episodeRows){<tr @key='Ui.Str(ep,"id")' class="@(Ui.Str(ep,"id")==lastUploadedEpisodeId ? "episode-just-uploaded" : "")"><td>@Ui.Num(ep,"episode_number")</td><td>@Ui.Str(ep,"title")</td><td>@Ui.Duration(Ui.Num(ep,"duration_seconds"))</td><td>@Ui.EpisodeStatus(Ui.Str(ep,"status"))</td><td><span class="storage-pill @(Ui.Str(ep,"storage")=="R2" ? "storage-r2" : "storage-local")">@(Ui.Str(ep,"storage")=="R2" ? (Ui.Str(ep,"organization")=="Grouped" ? "☁ R2 / Truyện" : "☁ R2 cũ") : "💾 Local")</span><small class="hls-ready-label">@(Ui.Num(ep,"hls_ready")==1 ? "🔒 HLS Premium sẵn sàng" : "⚠ Chưa tạo HLS")</small></td><td><div class="table-actions"><button class="text-link" disabled="@busy" @onclick="() => EditEpisode(ep)">Sửa / Thay MP3</button>@if(Ui.Num(ep,"hls_ready")!=1) { <button class="btn btn-sm btn-outline" disabled="@busy" @onclick='() => PrepareHls(Ui.Str(ep,"id"))'>🔒 Tạo HLS</button> }<button class="btn btn-sm btn-danger-outline" disabled="@busy" @onclick="() => AskDeleteEpisode(ep)">Xóa</button>@if(Ui.Str(ep,"organization")!="Grouped" && Ui.Str(storageInfo,"mode")=="R2") { <button class="btn btn-sm btn-outline" disabled="@busy" @onclick='() => MigrateEpisode(Ui.Str(ep,"id"))'>↑ Vào thư mục truyện</button> }</div></td></tr>}</tbody></table></div>
                 @if(editEpisodeId!="")
                 {
                     <div class="inline-editor episode-editor">
@@ -617,17 +617,17 @@
         <div class="panel rounded-2xl"><h2>Đánh giá của thành viên</h2><p class="hint">Một người dùng chỉ được đánh giá một lần mỗi truyện. Admin có thể ẩn/hiện nội dung.</p>
             <div class="review-admin-list">@foreach(var r in reviewRows)
             {<div class="review-admin-item"><div><b>@Ui.Str(r,"story_title")</b> · @Ui.Str(r,"username") <span class="rating-stars">@(new string('★',Ui.Num(r,"stars")))</span>
-              <p>@Ui.Str(r,"body")</p><small>@Ui.Date(Ui.Str(r,"updated_at")) · @Ui.Str(r,"status")</small></div>
+              <p>@Ui.Str(r,"body")</p><small>@Ui.Date(Ui.Str(r,"updated_at")) · @Ui.ReviewStatus(Ui.Str(r,"status"))</small></div>
               <button class="btn btn-sm btn-outline" @onclick="() => ModerateReview(r)">@(Ui.Str(r,"status")=="Visible"?"Ẩn":"Hiện")</button></div>}
             </div>
         </div>
     }
     else if(tab=="users")
     {
-        <div class="panel rounded-2xl"><h2>Danh sách thành viên (@userRows.Length)</h2><div class="table-scroll overflow-x-auto"><table><thead><tr><th>Username</th><th>Họ tên</th><th>Quyền</th><th>Trạng thái</th><th>Premium đến</th><th></th></tr></thead><tbody>@foreach(var u in userRows){<tr><td class="mono">@Ui.Str(u,"username")</td><td>@Ui.Str(u,"full_name")</td><td>@Ui.Str(u,"role")</td><td><span class="pill">@Ui.Str(u,"status")</span></td><td>@Ui.Date(Ui.Str(u,"premiumUntil"))</td><td><button class="text-link" @onclick="() => EditUser(u)">Quản lý</button></td></tr>}</tbody></table></div></div>
+        <div class="panel rounded-2xl"><h2>Danh sách thành viên (@userRows.Length)</h2><div class="table-scroll overflow-x-auto"><table><thead><tr><th>Username</th><th>Họ tên</th><th>Quyền</th><th>Trạng thái</th><th>Premium đến</th><th></th></tr></thead><tbody>@foreach(var u in userRows){<tr><td class="mono">@Ui.Str(u,"username")</td><td>@Ui.Str(u,"full_name")</td><td>@Ui.Str(u,"role")</td><td><span class="pill">@Ui.UserStatus(Ui.Str(u,"status"))</span></td><td>@Ui.Date(Ui.Str(u,"premiumUntil"))</td><td><button class="text-link" @onclick="() => EditUser(u)">Quản lý</button></td></tr>}</tbody></table></div></div>
         @if(editUserId!="")
         {
-            <div class="panel top-margin form"><h2>Chỉnh sửa: @editUsername</h2><div class="two-column"><label>Họ và tên<input @bind="editFullName" maxlength="100"/></label><label>Số điện thoại<input @bind="editPhone" maxlength="25"/></label></div><label>Địa chỉ<textarea @bind="editAddress" maxlength="300"></textarea></label><label>Trạng thái<select @bind="editStatus"><option value="Active">Hoạt động</option><option value="Locked">Khóa tài khoản</option><option value="Deleted">Soft delete</option></select></label><button class="btn btn-primary" @onclick="SaveUser" disabled="@busy">Lưu thay đổi</button>
+            <div class="panel top-margin form"><h2>Chỉnh sửa: @editUsername</h2><div class="two-column"><label>Họ và tên<input @bind="editFullName" maxlength="100"/></label><label>Số điện thoại<input @bind="editPhone" maxlength="25"/></label></div><label>Địa chỉ<textarea @bind="editAddress" maxlength="300"></textarea></label><label>Trạng thái<select @bind="editStatus"><option value="Active">Hoạt động</option><option value="Locked">Khóa tài khoản</option><option value="Deleted">Đã xóa (Soft delete)</option></select></label><button class="btn btn-primary" @onclick="SaveUser" disabled="@busy">Lưu thay đổi</button>
                 <div class="divider"></div><h3>Admin cấp / gia hạn Premium</h3><p class="hint">Tự ghi thành một dòng trong lịch sử đơn hàng của User, có lý do và ngày hết hạn sau khi cộng thêm. Không tạo bill hoặc thanh toán giả.</p><div class="two-column"><label>Số tháng<input type="number" min="1" max="36" @bind="grantMonths"/></label><label>Lý do cấp / gia hạn<input @bind="grantReason" maxlength="300" placeholder="Ví dụ: Tặng Premium tri ân, hỗ trợ gia hạn..."/></label></div><button class="btn btn-gold" @onclick="GrantPremium" disabled="@busy">♛ Cấp / gia hạn Premium + lưu lịch sử</button>
             </div>
         }
@@ -639,7 +639,8 @@
         @foreach(var o in orderRows)
         {
             var granted=Ui.Str(o,"order_type")=="AdminGrant";
-            <tr><td class="mono">@Ui.Str(o,"code")</td><td>@Ui.Str(o,"username")</td><td><span class="pill @(granted ? "premium-admin-badge" : "")">@(granted ? "Admin cấp" : "User tự mua")</span>@if(granted){<small class="order-subtitle">@Ui.Str(o,"grant_reason")</small>}</td><td>@(granted ? "0đ (cấp quyền)" : Ui.Money(Ui.Num(o,"amount_vnd")))</td><td>@(granted ? "Đã cấp / gia hạn" : Ui.Str(o,"status"))</td><td>@Ui.Date(Ui.Str(o,"created_at"))</td><td><button class="text-link" @onclick="() => SelectOrder(o)">@(granted ? "Chi tiết" : "Đối soát")</button></td></tr>
+            var ordStatus = Ui.Str(o,"status");
+            <tr><td class="mono">@Ui.Str(o,"code")</td><td>@Ui.Str(o,"username")</td><td><span class="pill @(granted ? "premium-admin-badge" : "")">@(granted ? "Admin cấp" : "User tự mua")</span>@if(granted){<small class="order-subtitle">@Ui.Str(o,"grant_reason")</small>}</td><td>@(granted ? "0đ (cấp quyền)" : Ui.Money(Ui.Num(o,"amount_vnd")))</td><td><span class="storage-pill @(granted ? "premium-admin-badge" : Ui.OrderStatusBadgeClass(ordStatus))">@(granted ? "Đã cấp / gia hạn" : Ui.OrderStatus(ordStatus))</span></td><td>@Ui.Date(Ui.Str(o,"created_at"))</td><td><button class="text-link" @onclick="() => SelectOrder(o)">@(granted ? "Chi tiết" : "Đối soát")</button></td></tr>
         }
         </tbody></table></div></div>
         @if(activeOrderId!="")
@@ -655,7 +656,7 @@
                 }
                 else
                 {
-                    <p>Số tiền: <b>@Ui.Money(activeOrderAmount)</b> · Trạng thái: <b>@activeOrderStatus</b></p>
+                    <p>Số tiền: <b>@Ui.Money(activeOrderAmount)</b> · Trạng thái: <b>@Ui.OrderStatus(activeOrderStatus)</b></p>
                     <div class="bank-order-snapshot"><b>Tài khoản cần đối soát</b><p>@activeOrderBank · @activeOrderAccountNumber · @activeOrderAccountName</p><small>Thông tin người nhận được lưu tại thời điểm tạo đơn.</small></div>
                     @if(activeOrderStatus is "Pending" or "Reviewing")
                     {
@@ -736,7 +737,7 @@
                                     <td><b>@Ui.Money(Ui.Num(row, "transfer_amount"))</b></td>
                                     <td class="mono">@Ui.Str(row, "content")</td>
                                     <td class="mono"><b>@(Ui.Str(row, "matched_order_code") != "" ? Ui.Str(row, "matched_order_code") : "—")</b></td>
-                                    <td><span class="pill @(st == "Confirmed" ? "storage-r2" : "")">@st</span></td>
+                                    <td><span class="pill @(st == "Confirmed" ? "storage-r2" : "")">@Ui.SePayStatus(st)</span></td>
                                 </tr>
                             }
                         </tbody>
