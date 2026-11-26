@@ -117,8 +117,13 @@ gdrive-*.json
 !**/appsettings.*.example.json
 
 # 7. Backup / archive / logs / runtime khác
-/backups/
-**/backups/
+# Chỉ đưa lên GitHub bản backup database mới nhất (langkinhhukhong.db, langkinhhukhong.sql) và kho bản thảo (story-texts)
+/backups/*
+!/backups/langkinhhukhong.db
+!/backups/langkinhhukhong.sql
+!/backups/story-texts/
+!/backups/story-texts/**
+/backups/secrets-local-only/
 /backup/
 **/backup/
 /lkh-web-backup-*/
