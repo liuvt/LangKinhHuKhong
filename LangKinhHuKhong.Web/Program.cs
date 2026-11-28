@@ -299,6 +299,7 @@ app.MapPost("/api/auth/login", async Task<IResult> (LoginReq req, HttpContext ct
     var currentHash = u.S("password_hash");
     var result = hasher.VerifyHashedPassword(identity, currentHash, req.Password ?? "");
     if (result == PasswordVerificationResult.Failed) return Results.Json(new { error = "Sai tài khoản hoặc mật khẩu." }, statusCode: 401);
+    if (u.S("status") == "Deleted") return Results.Json(new { error = "Tài khoản này đã bị xóa hoặc không còn tồn tại." }, statusCode: 403);
     if (u.S("status") != "Active") return Results.Json(new { error = "Tài khoản đã bị khóa hoặc ngừng hoạt động." }, statusCode: 403);
     if (result == PasswordVerificationResult.SuccessRehashNeeded)
     {
@@ -418,7 +419,10 @@ app.MapGet("/api/stories", async Task<IResult> (Database source, string? q, stri
             ) GROUP BY story_id
         ),
         review_stats AS (
-            SELECT story_id, COUNT(*) AS cnt, ROUND(AVG(stars),1) AS avg_stars FROM story_reviews WHERE status='Visible' GROUP BY story_id
+            SELECT r.story_id, COUNT(*) AS cnt, ROUND(AVG(r.stars),1) AS avg_stars
+            FROM story_reviews r JOIN users u ON u.id=r.user_id
+            WHERE r.status='Visible' AND u.status='Active'
+            GROUP BY r.story_id
         ),
         genre_list AS (
             SELECT sg.story_id, group_concat(g.name,' | ') AS names
@@ -455,8 +459,8 @@ app.MapGet("/api/stories/{slug}", async Task<IResult> (string slug, HttpContext 
         CASE WHEN cover_file<>'' THEN '/api/stories/' || id || '/cover' ELSE cover_url END AS cover_url,status,
         COALESCE((SELECT group_concat(g.name,' | ') FROM story_genres sg JOIN genres g ON g.slug=sg.genre_slug WHERE sg.story_id=stories.id),'') AS genres,
         (SELECT COUNT(*) FROM story_listeners l WHERE l.story_id=stories.id AND l.qualified_at IS NOT NULL) AS listenerCount,
-        (SELECT COUNT(*) FROM story_reviews r WHERE r.story_id=stories.id AND r.status='Visible') AS ratingCount,
-        COALESCE((SELECT ROUND(AVG(r.stars),1) FROM story_reviews r WHERE r.story_id=stories.id AND r.status='Visible'),0) AS ratingAverage
+        (SELECT COUNT(*) FROM story_reviews r JOIN users u ON u.id=r.user_id WHERE r.story_id=stories.id AND r.status='Visible' AND u.status='Active') AS ratingCount,
+        COALESCE((SELECT ROUND(AVG(r.stars),1) FROM story_reviews r JOIN users u ON u.id=r.user_id WHERE r.story_id=stories.id AND r.status='Visible' AND u.status='Active'),0) AS ratingAverage
         FROM stories WHERE slug=@slug AND status='Published'",("@slug",slug));
     if (story is null) return Results.NotFound();
     if (ctx.User.Identity?.IsAuthenticated == true)
@@ -748,7 +752,7 @@ admin.MapGet("/users", async Task<IResult> (Database source, string? q) =>
     await using var db = await source.OpenAsync();
     return Results.Ok(await db.ListAsync(@"
         WITH sub_max AS (SELECT user_id, MAX(ends_at) AS max_end FROM subscriptions GROUP BY user_id)
-        SELECT u.id,u.username,u.full_name,u.phone,u.address,u.role,u.status,u.created_at,
+        SELECT u.id,u.username,u.full_name,u.phone,u.address,u.role,u.status,u.created_at,u.updated_at,
         sm.max_end AS premiumUntil
         FROM users u LEFT JOIN sub_max sm ON sm.user_id=u.id
         WHERE (@q='' OR u.username LIKE @term OR u.full_name LIKE @term OR u.phone LIKE @term)
@@ -768,6 +772,30 @@ admin.MapPut("/users/{id}", async Task<IResult> (string id, AdminUserReq req, Ht
     InvalidateUserAuthCache(id);
     await Helpers.Audit(db,Helpers.UserId(ctx.User),"user.update",id,$"status={req.Status}");
     return Results.Ok(new { message = "Đã cập nhật tài khoản." });
+});
+admin.MapDelete("/users/{id}", async Task<IResult> (string id, HttpContext ctx, Database source) =>
+{
+    if (id == Helpers.UserId(ctx.User)) return Bad("Không thể tự xóa tài khoản Admin đang đăng nhập.");
+    await using var db = await source.OpenAsync();
+    var u = await db.FirstAsync("SELECT username,role FROM users WHERE id=@id", ("@id", id));
+    if (u is null) return Results.NotFound();
+    if (u.S("role") == "Admin") return Bad("Không thể xóa tài khoản Quản trị viên (Admin).");
+    await db.ExecAsync("UPDATE users SET status='Deleted', updated_at=@now WHERE id=@id",
+        ("@now", Helpers.Now()), ("@id", id));
+    InvalidateUserAuthCache(id);
+    await Helpers.Audit(db, Helpers.UserId(ctx.User), "user.soft_delete", id, $"username={u.S("username")}");
+    return Results.Ok(new { message = $"Đã xóa mềm tài khoản '{u.S("username")}' và chuyển vào Danh sách tài khoản bị xóa." });
+});
+admin.MapPost("/users/{id}/restore", async Task<IResult> (string id, HttpContext ctx, Database source) =>
+{
+    await using var db = await source.OpenAsync();
+    var u = await db.FirstAsync("SELECT username,role FROM users WHERE id=@id", ("@id", id));
+    if (u is null) return Results.NotFound();
+    await db.ExecAsync("UPDATE users SET status='Active', updated_at=@now WHERE id=@id",
+        ("@now", Helpers.Now()), ("@id", id));
+    InvalidateUserAuthCache(id);
+    await Helpers.Audit(db, Helpers.UserId(ctx.User), "user.restore", id, $"username={u.S("username")}");
+    return Results.Ok(new { message = $"Đã khôi phục tài khoản '{u.S("username")}' về trạng thái Hoạt động." });
 });
 admin.MapPost("/users/{id}/premium", async Task<IResult> (string id, GrantReq req, HttpContext ctx, Database source) =>
 {
