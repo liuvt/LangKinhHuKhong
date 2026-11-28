@@ -22,7 +22,8 @@
         <button class="@(tab=="notepad"?"active":"")" @onclick="SwitchToNotepadTab">📝 Bản thảo (.md/.txt)</button>
         <button class="@(tab=="genres"?"active":"")" @onclick='() => tab = "genres"'>Thể loại</button>
         <button class="@(tab=="reviews"?"active":"")" @onclick='() => tab = "reviews"'>Đánh giá</button>
-        <button class="@(tab=="users"?"active":"")" @onclick='() => tab = "users"'>Thành viên</button>
+        <button class="@(tab=="users" && userListMode!="deleted"?"active":"")" @onclick='() => { tab = "users"; userListMode = "active"; editUserId = ""; }'>Thành viên (@ActiveAndLockedUserRows.Length)</button>
+        <button class="@(tab=="users" && userListMode=="deleted"?"active":"")" @onclick='() => { tab = "users"; userListMode = "deleted"; editUserId = ""; }'>🗑 Tài khoản bị xóa (@DeletedUserRows.Length)</button>
         <button class="@(tab=="orders"?"active":"")" @onclick='() => tab = "orders"'>Thanh toán</button>
         <button class="@(tab=="banks"?"active":"")" @onclick='() => tab = "banks"'>Tài khoản QR</button>
         <button class="@(tab=="settings"?"active":"")" @onclick='() => tab = "settings"'>Cấu hình gói</button>
@@ -467,14 +468,11 @@
 
         <div class="episode-list-toolbar" style="padding-top:0;margin-bottom:0.75rem">
             <div class="table-actions" style="flex-wrap:wrap;gap:0.5rem">
-                <button type="button" class="btn btn-sm @(userListMode == "active" ? "btn-primary" : "btn-outline")" @onclick='() => userListMode = "active"'>
+                <button type="button" class="btn btn-sm @(userListMode == "active" ? "btn-primary" : "btn-outline")" @onclick='() => { userListMode = "active"; editUserId = ""; }'>
                     👥 Danh sách thành viên (@activeTotal)
                 </button>
-                <button type="button" class="btn btn-sm @(userListMode == "deleted" ? "btn-primary" : "btn-outline")" @onclick='() => userListMode = "deleted"'>
+                <button type="button" class="btn btn-sm @(userListMode == "deleted" ? "btn-primary" : "btn-outline")" @onclick='() => { userListMode = "deleted"; editUserId = ""; }'>
                     🗑 Danh sách tài khoản bị xóa (@deletedTotal)
-                </button>
-                <button type="button" class="btn btn-sm @(userListMode == "all" ? "btn-primary" : "btn-outline")" @onclick='() => userListMode = "all"'>
-                    ⊞ Hiển thị cả hai (@userRows.Length)
                 </button>
             </div>
         </div>
@@ -1356,7 +1354,7 @@
     private string uploadStatus="",lastUploadedEpisodeId="",uploadingTarget="vps";
     private string textFileTitle="",previewTextId="",previewTextFileName="",previewTextContent="";
     private string notepadFilterStoryId="",notepadFilterStorageTarget="",notepadSearch="",notepadUploadStoryId="",notepadUploadTitle="";
-    private string userSearch="",userRoleFilter="",userStatusFilter="",userSortField="created_at",userListMode="all",deletedUserSearch="";
+    private string userSearch="",userRoleFilter="",userStatusFilter="",userSortField="created_at",userListMode="active",deletedUserSearch="";
     private bool userSortAsc=false;
     private string orderSearch="",orderTypeFilter="",orderStatusFilter="",orderSortField="created_at";
     private bool orderSortAsc=false;
@@ -1635,7 +1633,7 @@
                 (SELECT COUNT(*) FROM episodes) AS episodes,
                 (SELECT COUNT(*) FROM orders WHERE status IN ('Pending','Reviewing')) AS pending,
                 (SELECT COALESCE(SUM(amount_vnd),0) FROM payments) AS income,
-                (SELECT COUNT(DISTINCT user_id) FROM subscriptions WHERE ends_at>@now) AS premium",
+                (SELECT COUNT(DISTINCT s.user_id) FROM subscriptions s JOIN users u ON u.id=s.user_id WHERE s.ends_at>@now AND u.status='Active') AS premium",
                 ("@now", Helpers.Now()));
             stats = JsonSerializer.SerializeToElement(new
             {
@@ -1694,6 +1692,7 @@
             reviewRows = (await db.ListAsync(@"SELECT r.id,r.stars,r.body,r.status,r.updated_at,
                 u.username,s.title AS story_title FROM story_reviews r
                 JOIN users u ON u.id=r.user_id JOIN stories s ON s.id=r.story_id
+                WHERE u.status<>'Deleted'
                 ORDER BY r.updated_at DESC LIMIT 200")).Select(x => JsonSerializer.SerializeToElement(x)).ToArray();
             userRows = (await db.ListAsync(@"
                 WITH sub_max AS (SELECT user_id, MAX(ends_at) AS max_end FROM subscriptions GROUP BY user_id)

@@ -735,7 +735,7 @@ admin.MapGet("/stats", async Task<IResult> (Database source) =>
         (SELECT COUNT(*) FROM episodes) AS episodes,
         (SELECT COUNT(*) FROM orders WHERE status IN ('Pending','Reviewing')) AS pending,
         (SELECT COALESCE(SUM(amount_vnd),0) FROM payments) AS income,
-        (SELECT COUNT(DISTINCT user_id) FROM subscriptions WHERE ends_at>@now) AS premium",
+        (SELECT COUNT(DISTINCT s.user_id) FROM subscriptions s JOIN users u ON u.id=s.user_id WHERE s.ends_at>@now AND u.status='Active') AS premium",
         ("@now", Helpers.Now()));
     return Results.Ok(new
     {
@@ -899,6 +899,7 @@ admin.MapGet("/reviews", async Task<IResult> (Database source) =>
     return Results.Ok(await db.ListAsync(@"SELECT r.id,r.stars,r.body,r.status,r.updated_at,
       u.username,s.title AS story_title FROM story_reviews r
       JOIN users u ON u.id=r.user_id JOIN stories s ON s.id=r.story_id
+      WHERE u.status<>'Deleted'
       ORDER BY r.updated_at DESC LIMIT 200"));
 });
 admin.MapPut("/reviews/{id}/visibility", async Task<IResult> (string id, ReviewVisibilityReq req, HttpContext ctx, Database source) =>
